@@ -174,7 +174,9 @@
     #drop-zone:hover, #drop-zone.drag-over { border-color: var(--accent); background: var(--accent-glow); transform: scale(1.005); }
     #drop-zone input[type="file"] { display: none; }
     .drop-icon-wrap { position: relative; display: inline-block; margin-bottom: 14px; transition: margin .25s; }
-    .drop-icon { font-size: 2.4rem; display: block; animation: float-icon 3s ease-in-out infinite; transition: font-size .25s; }
+    .icon { display: inline-block; vertical-align: middle; flex-shrink: 0; line-height: 0; }
+    .drop-icon { font-size: 2.4rem; display: block; animation: float-icon 3s ease-in-out infinite; transition: font-size .25s; color: var(--accent-2); }
+    .drop-icon svg { width: 1em; height: 1em; }
     @keyframes float-icon { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
     .drop-arrow { position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%); font-size: .7rem; color: var(--accent-2); animation: bounce-arrow 1.8s ease-in-out infinite; opacity: .8; transition: opacity .25s; }
     @keyframes bounce-arrow { 0%, 100% { transform: translateX(-50%) translateY(0); opacity: .6; } 50% { transform: translateX(-50%) translateY(4px); opacity: 1; } }
@@ -398,11 +400,11 @@
     .send-col .step-connector { background: var(--accent); }
     .recv-col .step-connector { background: var(--success); }
     .privacy-strip { margin-top: 14px; padding: 14px 18px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); display: flex; align-items: center; gap: 12px; }
-    .privacy-icon { font-size: 1.2rem; flex-shrink: 0; }
+    .privacy-icon { width: 20px; height: 20px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
     .privacy-text { font-size: .78rem; color: var(--muted-2); line-height: 1.5; }
     .privacy-text strong { color: var(--text); }
     .dependency-strip { margin-top: 10px; padding: 12px 16px; background: rgba(245,158,11,.06); border: 1px solid rgba(245,158,11,.18); border-radius: var(--radius-sm); display: flex; align-items: flex-start; gap: 10px; }
-    .dependency-strip .ds-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+    .dependency-strip .ds-icon { width: 18px; height: 18px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--warn); }
     .dependency-strip .ds-text { font-size: .76rem; color: var(--warn); line-height: 1.5; }
     .dependency-strip .ds-text strong { color: #fbbf24; }
 
@@ -538,6 +540,45 @@
 
 <canvas id="circuit-bg" aria-hidden="true"></canvas>
 
+<!-- ── SVG icon sprite ── -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <!-- Upload / Send -->
+  <symbol id="ico-send" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 11V3M5 6l3-3 3 3"/><path d="M2 11v1.5A1.5 1.5 0 003.5 14h9A1.5 1.5 0 0014 12.5V11"/>
+  </symbol>
+  <!-- Download / Receive -->
+  <symbol id="ico-recv" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 3v8M5 9l3 3 3-3"/><path d="M2 11v1.5A1.5 1.5 0 003.5 14h9A1.5 1.5 0 0014 12.5V11"/>
+  </symbol>
+  <!-- Cloud -->
+  <symbol id="ico-cloud" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12.5 11H4a3 3 0 01-.4-6A5 5 0 0113 7.5a3.5 3.5 0 01-.5 3.5z"/>
+  </symbol>
+  <!-- Lightning bolt -->
+  <symbol id="ico-bolt" viewBox="0 0 16 16">
+    <path d="M8.8 1.5L2.5 9H7.5L6.5 14.5 13.5 7H8.5l.3-5.5z" fill="currentColor"/>
+  </symbol>
+  <!-- Lock -->
+  <symbol id="ico-lock" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="7.5" width="10" height="7" rx="1.5"/>
+    <path d="M5.5 7.5V5a2.5 2.5 0 015 0v2.5"/>
+  </symbol>
+  <!-- Warning triangle -->
+  <symbol id="ico-warn" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 2.5L1.5 13.5h13L8 2.5z"/>
+    <path d="M8 7v3"/><circle cx="8" cy="11.5" r=".6" fill="currentColor" stroke="none"/>
+  </symbol>
+  <!-- Check mark -->
+  <symbol id="ico-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M2.5 8.5L6.5 12.5 13.5 4"/>
+  </symbol>
+  <!-- Large upload (drop zone) -->
+  <symbol id="ico-upload-lg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M24 32V14M15 22l9-9 9 9"/>
+    <path d="M8 36v4a2 2 0 002 2h28a2 2 0 002-2v-4"/>
+  </symbol>
+</svg>
+
 <div class="bg-orb bg-orb-1"></div>
 <div class="bg-orb bg-orb-2"></div>
 <div class="bg-orb bg-orb-3"></div>
@@ -574,8 +615,8 @@
 
   <div class="card">
     <div class="tabs" role="tablist">
-      <button class="tab active" id="tab-send" role="tab" aria-selected="true"  aria-controls="panel-send" onclick="switchTab('send')">📤&ensp;Send</button>
-      <button class="tab"        id="tab-recv" role="tab" aria-selected="false" aria-controls="panel-recv" onclick="switchTab('recv')">📥&ensp;Receive</button>
+      <button class="tab active" id="tab-send" role="tab" aria-selected="true"  aria-controls="panel-send" onclick="switchTab('send')"><svg class="icon" width="15" height="15"><use href="#ico-send"/></svg>&ensp;Send</button>
+      <button class="tab"        id="tab-recv" role="tab" aria-selected="false" aria-controls="panel-recv" onclick="switchTab('recv')"><svg class="icon" width="15" height="15"><use href="#ico-recv"/></svg>&ensp;Receive</button>
     </div>
 
     <!-- ── SEND PANEL ── -->
@@ -583,7 +624,7 @@
 
       <div id="drop-zone" role="button" tabindex="0" aria-label="Drop files here or click to browse">
         <div class="drop-icon-wrap">
-          <span class="drop-icon">📂</span>
+          <span class="drop-icon"><svg><use href="#ico-upload-lg"/></svg></span>
           <span class="drop-arrow">▾</span>
         </div>
         <div>
@@ -611,12 +652,12 @@
         <p class="mode-label">Transfer mode</p>
         <div class="mode-cards">
           <div class="mode-card active" id="mode-p2p" role="button" tabindex="0" onclick="selectMode('p2p')" onkeydown="if(event.key==='Enter')selectMode('p2p')">
-            <div class="mode-card-icon">⚡</div>
+            <div class="mode-card-icon"><svg class="icon" width="22" height="22"><use href="#ico-bolt"/></svg></div>
             <div class="mode-card-name">P2P Direct</div>
             <div class="mode-card-desc">No size limit · Fully encrypted · Both online at once</div>
           </div>
           <div class="mode-card cloud" id="mode-cloud" role="button" tabindex="0" onclick="selectMode('cloud')" onkeydown="if(event.key==='Enter')selectMode('cloud')">
-            <div class="mode-card-icon">☁️</div>
+            <div class="mode-card-icon"><svg class="icon" width="22" height="22"><use href="#ico-cloud"/></svg></div>
             <div class="mode-card-name">Cloud Transfer</div>
             <div class="mode-card-desc">Upload to cloud · Sender can close tab · Auto-expires</div>
           </div>
@@ -637,7 +678,7 @@
           <span class="expiry-rec-badge" id="expiry-rec-badge">30 min</span>
           <span id="expiry-rec-reason"></span>
         </div>
-        <button id="cloud-upload-btn">☁️ Upload &amp; Generate Link</button>
+        <button id="cloud-upload-btn"><svg class="icon" width="14" height="14"><use href="#ico-cloud"/></svg> Upload &amp; Generate Link</button>
       </div>
 
       <!-- Cloud upload progress (per-file) -->
@@ -645,10 +686,10 @@
 
       <!-- Cloud link display (shown after successful upload) -->
       <div id="cloud-link-display" style="display:none">
-        <div class="cloud-link-badge">☁️ Cloud Link Ready</div>
+        <div class="cloud-link-badge"><svg class="icon" width="12" height="12"><use href="#ico-cloud"/></svg> Cloud Link Ready</div>
         <div class="cloud-link-box">
           <span id="cloud-link-text">—</span>
-          <button id="copy-cloud-btn">🔗 Copy</button>
+          <button id="copy-cloud-btn">Copy</button>
         </div>
         <div class="cloud-expiry-note">
           <span class="cloud-expiry-badge" id="cloud-expiry-badge">Expires in 30 min</span>
@@ -657,9 +698,9 @@
 
       <!-- Cloud upload error -->
       <div id="mega-error-box" class="mega-error-box" style="display:none">
-        <div class="mega-error-title">☁️ Upload failed</div>
+        <div class="mega-error-title"><svg class="icon" width="14" height="14"><use href="#ico-cloud"/></svg> Upload failed</div>
         <div class="mega-error-body" id="mega-error-body">Could not upload to cloud storage. Try P2P mode instead.</div>
-        <button class="mega-switch-p2p" id="mega-switch-p2p">⚡ Switch to P2P</button>
+        <button class="mega-switch-p2p" id="mega-switch-p2p"><svg class="icon" width="13" height="13"><use href="#ico-bolt"/></svg> Switch to P2P</button>
       </div>
 
       <!-- Code display -->
@@ -667,11 +708,11 @@
         <p class="code-label">Share this code with the receiver</p>
         <div class="code-box">
           <div id="peer-code" aria-live="polite">——————</div>
-          <button class="copy-btn" id="copy-link-btn" aria-label="Copy shareable link">🔗 Copy link</button>
+          <button class="copy-btn" id="copy-link-btn" aria-label="Copy shareable link">Copy link</button>
         </div>
         <!-- Keep-open warning -->
         <div class="keep-open-note" id="keep-open-note">
-          <span class="kon-icon">⚠️</span>
+          <span class="kon-icon"><svg class="icon" width="16" height="16"><use href="#ico-warn"/></svg></span>
           <span class="kon-text"><strong>Keep this tab open</strong> until the receiver finishes downloading. Closing it will cut their transfer immediately.</span>
         </div>
       </div>
@@ -744,7 +785,7 @@
         </div>
         <div id="manifest-file-list"></div>
         <div class="manifest-actions">
-          <button class="manifest-dl-all" id="manifest-dl-all">📥 Download All</button>
+          <button class="manifest-dl-all" id="manifest-dl-all"><svg class="icon" width="14" height="14"><use href="#ico-recv"/></svg> Download All</button>
           <button class="manifest-dl-sel" id="manifest-dl-sel">Download Selected</button>
         </div>
       </div>
@@ -798,10 +839,10 @@
 
       <!-- Cloud receive section (shown when ?c= link detected) -->
       <div id="cloud-recv-section" style="display:none">
-        <div class="cloud-recv-badge">☁️ Cloud Transfer</div>
+        <div class="cloud-recv-badge"><svg class="icon" width="12" height="12"><use href="#ico-cloud"/></svg> Cloud Transfer</div>
         <div id="cloud-recv-files" class="cloud-recv-files"></div>
         <div class="cloud-recv-actions">
-          <button class="cloud-recv-all-btn" id="cloud-recv-all-btn">☁️ Download All</button>
+          <button class="cloud-recv-all-btn" id="cloud-recv-all-btn"><svg class="icon" width="14" height="14"><use href="#ico-recv"/></svg> Download All</button>
           <button class="cloud-recv-cancel-all-btn" id="cloud-recv-cancel-all-btn">✕ Cancel All</button>
         </div>
         <div class="cloud-expiry-info" id="cloud-expiry-info" style="display:none"></div>
@@ -812,7 +853,7 @@
         <div class="expired-icon">⏰</div>
         <div class="expired-title">This link has expired</div>
         <p class="expired-sub">The sender's cloud link has passed its expiry time. Ask them to re-upload, or use P2P mode for a direct transfer.</p>
-        <button class="expired-p2p-cta" onclick="switchTab('send')">⚡ Try P2P Mode Instead</button>
+        <button class="expired-p2p-cta" onclick="switchTab('send')"><svg class="icon" width="13" height="13"><use href="#ico-bolt"/></svg> Try P2P Mode Instead</button>
       </div>
 
     </div><!-- /panel-recv -->
@@ -828,15 +869,15 @@
 
     <!-- Mode toggle -->
     <div class="hiw-toggle">
-      <button class="hiw-tab active" data-mode="p2p">⚡ P2P</button>
-      <button class="hiw-tab" data-mode="cloud">☁️ Cloud</button>
+      <button class="hiw-tab active" data-mode="p2p"><svg class="icon" width="13" height="13"><use href="#ico-bolt"/></svg> P2P</button>
+      <button class="hiw-tab" data-mode="cloud"><svg class="icon" width="13" height="13"><use href="#ico-cloud"/></svg> Cloud</button>
     </div>
 
     <!-- P2P steps -->
     <div class="hiw-mode active" id="hiw-p2p">
       <div class="how-grid">
         <div class="how-col send-col">
-          <div class="how-col-title"><span>📤</span> Send Files</div>
+          <div class="how-col-title"><svg class="icon" width="14" height="14"><use href="#ico-send"/></svg> Send Files</div>
           <div class="how-step">
             <span class="step-num">1</span>
             <div class="step-body">
@@ -856,13 +897,13 @@
           <div class="how-step">
             <span class="step-num">3</span>
             <div class="step-body">
-              <div class="step-title">⚠️ Stay until they're done</div>
+              <div class="step-title"><svg class="icon" width="13" height="13" style="margin-right:3px"><use href="#ico-warn"/></svg> Stay until they're done</div>
               <div class="step-desc">Your browser <strong style="color:var(--warn)">is</strong> the server. Keep this tab open until you see "✅ All files received." Closing early cuts the receiver's download immediately.</div>
             </div>
           </div>
         </div>
         <div class="how-col recv-col">
-          <div class="how-col-title"><span>📥</span> Receive Files</div>
+          <div class="how-col-title"><svg class="icon" width="14" height="14"><use href="#ico-recv"/></svg> Receive Files</div>
           <div class="how-step">
             <span class="step-num">1</span>
             <div class="step-body">
@@ -889,13 +930,13 @@
         </div>
       </div>
       <div class="privacy-strip">
-        <span class="privacy-icon">🔒</span>
+        <span class="privacy-icon"><svg width="20" height="20"><use href="#ico-lock"/></svg></span>
         <p class="privacy-text">
           <strong>Your files never leave your browser.</strong> Beam uses WebRTC — a direct encrypted channel between browsers. The signaling server only exchanges connection info, then steps away entirely.
         </p>
       </div>
       <div class="dependency-strip">
-        <span class="ds-icon">⚡</span>
+        <span class="ds-icon"><svg width="16" height="16"><use href="#ico-bolt"/></svg></span>
         <p class="ds-text"><strong>P2P mode: both sides must be online at the same time.</strong> The sender's open browser tab <em>is</em> the source. If they close it, the transfer stops and you'll see a disconnection alert.</p>
       </div>
     </div>
@@ -904,7 +945,7 @@
     <div class="hiw-mode" id="hiw-cloud">
       <div class="how-grid">
         <div class="how-col send-col cloud-send-col">
-          <div class="how-col-title"><span>📤</span> Send Files</div>
+          <div class="how-col-title"><svg class="icon" width="14" height="14"><use href="#ico-send"/></svg> Send Files</div>
           <div class="how-step">
             <span class="step-num">1</span>
             <div class="step-body">
@@ -924,13 +965,13 @@
           <div class="how-step">
             <span class="step-num">3</span>
             <div class="step-body">
-              <div class="step-title">✅ Close your tab</div>
+              <div class="step-title"><svg class="icon" width="13" height="13" style="margin-right:3px;color:var(--success)"><use href="#ico-check"/></svg> Close your tab</div>
               <div class="step-desc">You're done. The file is already in cloud storage. The receiver downloads any time before the link expires — your tab doesn't need to stay open.</div>
             </div>
           </div>
         </div>
         <div class="how-col recv-col">
-          <div class="how-col-title"><span>📥</span> Receive Files</div>
+          <div class="how-col-title"><svg class="icon" width="14" height="14"><use href="#ico-recv"/></svg> Receive Files</div>
           <div class="how-step">
             <span class="step-num">1</span>
             <div class="step-body">
@@ -943,21 +984,21 @@
             <span class="step-num">2</span>
             <div class="step-body">
               <div class="step-title">Download your file</div>
-              <div class="step-desc">Click ☁️ Download — the file streams directly from cloud storage to your device. No waiting for the sender to be online.</div>
+              <div class="step-desc">Click Download — the file streams directly from cloud storage to your device. No waiting for the sender to be online.</div>
             </div>
           </div>
           <div class="step-connector"></div>
           <div class="how-step">
             <span class="step-num">3</span>
             <div class="step-body">
-              <div class="step-title">🔐 Single-use & auto-deleted</div>
+              <div class="step-title"><svg class="icon" width="13" height="13" style="margin-right:3px"><use href="#ico-lock"/></svg> Single-use & auto-deleted</div>
               <div class="step-desc">The link works once. The file is deleted from cloud storage immediately after download — or automatically when the expiry time passes.</div>
             </div>
           </div>
         </div>
       </div>
       <div class="cloud-privacy-strip">
-        <span class="privacy-icon">🔐</span>
+        <span class="privacy-icon"><svg width="20" height="20" style="color:#38bdf8"><use href="#ico-lock"/></svg></span>
         <p class="privacy-text">
           <strong style="color:#38bdf8">Files are deleted from cloud storage immediately after download.</strong> The link is single-use — even if someone intercepts it after the first download, the file is already gone.
         </p>
@@ -2012,7 +2053,7 @@ function handleCloudLinkParam(param) {
           <div class="crf-size">${formatBytes(f.s)}</div>
         </div>
         <div class="crf-btns">
-          <button class="crf-dl" id="dl-btn-${f.l}">☁️ Download</button>
+          <button class="crf-dl" id="dl-btn-${f.l}">Download</button>
           <button class="crf-cancel-btn" id="cancel-btn-${f.l}" title="Cancel this file">✕</button>
         </div>
       `;
