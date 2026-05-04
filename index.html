@@ -1354,48 +1354,16 @@ async function startCloudUpload() {
 // Upload directly from browser to MEGA (no size limit — Worker never sees the bytes)
 // Then register the MEGA credentials with the Worker so it can manage tokens + deletion.
 async function uploadFileToWorker(file, expiryMinutes) {
-
-  // Step 1 — load megajs from CDN (browser build via esm.sh)
-  const { Storage } = await import('https://esm.sh/megajs@1.1.1');
-
-  // Step 2 — create anonymous MEGA session in browser
-  const storage = await new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('MEGA: session timeout')), 30_000);
-    const s = new Storage({ keepalive: false });
-    s.on('ready', () => { clearTimeout(t); resolve(s); });
-    s.on('error', (e) => { clearTimeout(t); reject(e); });
-  });
-
-  const sid = storage.sid; // save session ID — needed for deletion later
-
-  // Step 3 — upload file bytes directly to MEGA from browser
-  const arrayBuffer = await file.arrayBuffer();
-  const uint8 = new Uint8Array(arrayBuffer);
-
-  const { shareLink, nodeId } = await new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('MEGA: upload timeout')), 300_000); // 5 min
-    const upload = storage.upload({ name: file.name, size: file.size });
-
-    upload.on('complete', async (megaFile) => {
-      clearTimeout(t);
-      try {
-        const link = await megaFile.link();
-        const nid  = megaFile.nodeId;
-        resolve({ shareLink: link, nodeId: nid });
-      } catch (e) { reject(e); }
-      finally { try { storage.close?.(); } catch (_) {} }
-    });
-    upload.on('error', (e) => { clearTimeout(t); reject(e); });
-
-    // Write file data to the upload stream
-    upload.end(uint8);
-  });
-
-  // Step 4 — register with Worker (just metadata, no file bytes)
-  const res = await fetch(`${BEAM_WORKER_URL}/register`, {
+  // File bytes go to the Worker which uploads to MEGA server-side.
+  // MEGA's API blocks browser-direct requests (CORS), so Worker handles it.
+  const res = await fetch(`${BEAM_WORKER_URL}/upload`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ shareLink, sid, nodeId, filename: file.name, size: file.size, expiryMinutes }),
+    headers: {
+      'Content-Type':          'application/octet-stream',
+      'X-Beam-Expiry-Minutes': String(expiryMinutes),
+      'X-Beam-Filename':       encodeURIComponent(file.name),
+    },
+    body: file,
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
