@@ -6,7 +6,7 @@
   <title>Beam — Zero-server file transfer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -69,7 +69,6 @@
 
     /* Super-label above the brand */
     .brand-super {
-      font-family: 'Space Grotesk', sans-serif;
       font-size: .62rem; font-weight: 600;
       letter-spacing: .28em; text-transform: uppercase;
       color: #22d3ee; opacity: .85;
@@ -84,26 +83,13 @@
 
     /* Logo block */
     .logo-wrap { display: flex; flex-direction: column; align-items: center; gap: 0; margin-bottom: 18px; }
-    .logo-icon {
-      width: 56px; height: 56px;
-      background: linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%);
-      border-radius: 18px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 1.65rem;
-      box-shadow: 0 0 28px rgba(14,165,233,.5), 0 0 56px rgba(14,165,233,.18), 0 4px 16px rgba(0,0,0,.4);
-      margin-bottom: 14px;
-      animation: icon-glow 3s ease-in-out infinite alternate;
-    }
-    @keyframes icon-glow {
-      from { box-shadow: 0 0 28px rgba(14,165,233,.45), 0 0 56px rgba(14,165,233,.15), 0 4px 16px rgba(0,0,0,.4); }
-      to   { box-shadow: 0 0 40px rgba(99,102,241,.65), 0 0 80px rgba(99,102,241,.22), 0 4px 16px rgba(0,0,0,.4); }
-    }
 
-    /* Brand name */
+    /* Brand name — Orbitron with deliberate letter-spacing */
     .logo-text {
-      font-family: 'Space Grotesk', sans-serif;
-      font-size: 4.2rem; font-weight: 700;
-      letter-spacing: -.03em; line-height: 1;
+      font-family: 'Orbitron', sans-serif;
+      font-size: 3.6rem; font-weight: 700;
+      letter-spacing: .2em; line-height: 1;
+      text-transform: uppercase;
       background: linear-gradient(135deg, #e0f2fe 0%, #38bdf8 28%, #818cf8 62%, #c084fc 100%);
       background-size: 250% auto;
       -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
@@ -114,9 +100,9 @@
       100% { background-position: 250% center; }
     }
 
-    /* Animated glow line beneath brand name */
+    /* Animated glow line beneath brand name — wider to match spaced letters */
     .logo-glow {
-      width: 120px; height: 2px; margin-top: 10px;
+      width: 240px; height: 2px; margin-top: 12px;
       background: linear-gradient(90deg, transparent, #22d3ee 40%, #818cf8 60%, transparent);
       border-radius: 99px; filter: blur(1.5px);
       animation: glow-bar 3s ease-in-out infinite alternate;
@@ -128,7 +114,6 @@
 
     /* Tagline */
     .tagline {
-      font-family: 'Space Grotesk', sans-serif;
       font-size: 1rem; font-weight: 400;
       letter-spacing: -.01em; line-height: 1.6;
       color: #94a3b8; margin-bottom: 22px;
@@ -143,7 +128,6 @@
       padding: 5px 13px; border-radius: 99px;
       border: 1px solid rgba(34,211,238,.2);
       background: rgba(14,165,233,.06);
-      font-family: 'Space Grotesk', sans-serif;
       font-size: .73rem; font-weight: 500;
       letter-spacing: .01em; color: #94a3b8;
       transition: border-color .2s, color .2s, background .2s;
@@ -554,7 +538,6 @@
   <header class="header">
     <p class="brand-super">Zero-Server &nbsp;·&nbsp; File Transfer</p>
     <div class="logo-wrap">
-      <div class="logo-icon">⚡</div>
       <span class="logo-text">Beam</span>
       <div class="logo-glow"></div>
     </div>
