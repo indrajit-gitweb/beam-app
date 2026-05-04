@@ -47,6 +47,7 @@ Beam removes every one of those blockers. Open the page, drop your file, share a
 - ✅ P2P transfers are end-to-end encrypted via WebRTC DTLS
 - ✅ Cloud mode works even after the sender closes their tab
 - ✅ Files are deleted from cloud storage after the first download
+- ✅ **Configurable link expiry** — set the link to expire in as little as 5 minutes or up to 24 hours; the file is wiped from cloud storage the moment it expires
 - ✅ Single-page app — one `index.html` file, self-hostable anywhere
 - ✅ No backend server to maintain for P2P (uses PeerJS public signalling)
 
@@ -54,7 +55,7 @@ Beam removes every one of those blockers. Open the page, drop your file, share a
 - ⚠️ **P2P requires both sides online simultaneously** — if the sender closes their tab, the transfer stops
 - ⚠️ **P2P speed depends on network** — transfers between NAT-restricted networks may be slower (relayed via TURN)
 - ⚠️ **Cloud links are single-use** — once the receiver downloads, the link is gone (by design for privacy)
-- ⚠️ **Cloud files expire** — Filebin.net retains files for up to 6 days; set a shorter expiry if needed
+- ⚠️ **Cloud file deletion depends on the Worker being alive** — files are deleted from Filebin immediately on download, or by the cleanup cron within ~1 minute of the expiry time you set. If the Worker's cron is somehow not running (e.g., zero requests for a long time), Filebin's own 6-day retention acts as the final safety net. In normal operation, the expiry you choose is what counts.
 - ⚠️ **Cloud mode needs the Beam Worker** — the Cloudflare Worker must be deployed (see setup below); the hosted version at [indrajit-gitweb.github.io/beam-app](https://indrajit-gitweb.github.io/beam-app) already has this configured
 - ⚠️ **Browser memory for P2P** — very large files (multi-GB) in P2P mode are chunked but held in browser memory; Cloud mode is better for files over ~1 GB
 

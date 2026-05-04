@@ -105,7 +105,11 @@ async function handleRegister(request, env, origin) {
       mimeType: mimeType || 'application/octet-stream',
       expiresAt,
     }),
-    { expirationTtl: expiryMinutes * 60 },
+    // TTL is set 10 minutes longer than expiresAt so the cleanup cron always
+    // has a chance to read the entry and delete the Filebin file before KV
+    // auto-removes it. Without this buffer, KV could self-delete the entry in
+    // the same minute the cron fires, causing Filebin files to linger.
+    { expirationTtl: expiryMinutes * 60 + 600 },
   );
 
   return json({ ok: true, token, expiresAt, expiryMinutes }, 200, origin);
