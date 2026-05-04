@@ -82,7 +82,13 @@
     .brand-super::after { background: linear-gradient(270deg, transparent, rgba(34,211,238,.6)); }
 
     /* Logo block */
-    .logo-wrap { display: flex; flex-direction: column; align-items: center; gap: 0; margin-bottom: 18px; }
+    .logo-wrap { display: flex; flex-direction: column; align-items: center; gap: 0; margin-bottom: 18px; animation: beam-in 0.62s cubic-bezier(0.16, 1, 0.3, 1) both; }
+    @keyframes beam-in {
+      0%   { transform: translateX(-70vw); filter: blur(22px); opacity: 0; }
+      58%  { transform: translateX(10px);  filter: blur(2px);  opacity: 1; }
+      78%  { transform: translateX(-4px);  filter: blur(0); }
+      100% { transform: translateX(0);     filter: blur(0); }
+    }
 
     /* Brand name — Orbitron with deliberate letter-spacing */
     .logo-text {
@@ -377,7 +383,12 @@
     .app-popup-close:hover { color: var(--text); }
 
     /* ── How it works ── */
-    .how-section { width: 100%; margin-top: 48px; animation: fade-up .8s .25s cubic-bezier(.22,1,.36,1) both; }
+    .how-section { width: 100%; margin-top: 48px; }
+    /* Switching P2P ↔ Cloud fades the new pane in */
+    .hiw-mode.active { animation: fade-up 0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
+    /* Scroll reveal — base state */
+    .reveal { opacity: 0; transform: translateY(28px); transition: opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1), transform 0.65s cubic-bezier(0.22, 1, 0.36, 1); }
+    .reveal.is-visible { opacity: 1; transform: none; }
     .how-header { text-align: center; margin-bottom: 28px; }
     .how-title { font-size: 1.15rem; font-weight: 800; letter-spacing: -.02em; color: var(--text); margin-bottom: 6px; }
     .how-sub { font-size: .83rem; color: var(--muted); }
@@ -862,7 +873,7 @@
   </div><!-- /card -->
 
   <!-- ── How it works ── -->
-  <section class="how-section" aria-label="How it works">
+  <section class="how-section reveal" aria-label="How it works">
     <div class="how-header">
       <h2 class="how-title">How it works</h2>
       <p class="how-sub">Transfer in seconds — no accounts, no installs, no waiting</p>
@@ -1000,7 +1011,7 @@
 
   </section>
 
-  <footer>
+  <footer class="reveal">
     Built with WebRTC · <a href="https://webrtc.org" target="_blank" rel="noopener">Learn about WebRTC</a> · <a href="https://peerjs.com" target="_blank" rel="noopener">Powered by PeerJS</a>
   </footer>
 
@@ -2570,6 +2581,19 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     document.querySelectorAll('.hiw-mode').forEach(m => m.classList.toggle('active', m.id === `hiw-${mode}`));
   });
 });
+
+/* ── Scroll reveal ─────────────────────────────────────────────────────────── */
+(function initReveal() {
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.classList.add('is-visible');
+        obs.unobserve(e.target);
+      }
+    });
+  }, { threshold: 0.08, rootMargin: '0px 0px -32px 0px' });
+  document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
+})();
 
 </script>
 </body>
