@@ -1,0 +1,27 @@
+name = "beam-worker"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# --------------------------------------------------------------------------
+# KV namespace — stores expiry records for uploaded files
+# Run `wrangler kv namespace create BEAM_EXPIRY` to get your namespace ID,
+# then paste it below (and optionally add a preview_id for local dev).
+# --------------------------------------------------------------------------
+[[kv_namespaces]]
+binding = "BEAM_EXPIRY"
+id      = "1e017e87467341288d06807340155b2a"
+# preview_id = "REPLACE_WITH_YOUR_KV_PREVIEW_ID"   # optional, for `wrangler dev`
+
+# --------------------------------------------------------------------------
+# Cron trigger — runs cleanup every minute, 24/7
+# --------------------------------------------------------------------------
+[triggers]
+crons = ["* * * * *"]
+
+# --------------------------------------------------------------------------
+# Environment variables (set secrets via `wrangler secret put`)
+# --------------------------------------------------------------------------
+# BEAM_ALLOWED_ORIGIN — CORS origin your Beam page is served from.
+# Set via: wrangler secret put BEAM_ALLOWED_ORIGIN
+# Example value: https://yourdomain.com  (or * for local testing only)
