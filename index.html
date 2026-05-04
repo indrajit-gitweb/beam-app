@@ -135,6 +135,19 @@
     .pill:hover { border-color: rgba(34,211,238,.45); color: #e0f2fe; background: rgba(14,165,233,.11); }
     .pill .dot { width: 5px; height: 5px; border-radius: 50%; background: #22d3ee; flex-shrink: 0; }
 
+    /* ── "Just Beam it." tagline ── */
+    .just-beam {
+      margin-top: 16px;
+      font-family: 'Orbitron', sans-serif;
+      font-size: .7rem; font-weight: 500;
+      letter-spacing: .12em; text-transform: uppercase;
+      color: #334155;
+    }
+    .just-beam .beam-word {
+      background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+
     /* ── Card ── */
     .card { width: 100%; background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--radius); box-shadow: var(--shadow); animation: fade-up .7s .1s cubic-bezier(.22,1,.36,1) both; position: relative; overflow: hidden; }
     .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: linear-gradient(90deg,transparent,var(--accent),var(--accent-3),transparent); opacity: .6; }
@@ -550,6 +563,7 @@
       <span class="pill"><span class="dot"></span>No size limit</span>
       <span class="pill"><span class="dot"></span>Zero server uploads</span>
     </div>
+    <p class="just-beam">Just <span class="beam-word">Beam</span> it.</p>
   </header>
 
   <div class="card">
