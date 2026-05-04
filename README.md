@@ -1,0 +1,228 @@
+# ⚡ Beam — Zero-Server File Transfer
+
+**Beam** is a browser-based file transfer tool that lets you send files of any size directly to another person — no sign-up, no cloud accounts, no subscriptions, and no credit card ever required.
+
+It supports two transfer modes so it works in every situation:
+
+| Mode | How it works | Best for |
+|------|-------------|----------|
+| **P2P (Direct)** | Files travel directly browser-to-browser over WebRTC | Fast transfers when both sides are online |
+| **Cloud** | Files upload to free cloud storage; receiver downloads via a one-time link | Large files or when sender/receiver can't be online at the same time |
+
+---
+
+## What problem does Beam solve?
+
+Sending a large file to someone is surprisingly painful:
+- Email has size limits (usually 25 MB)
+- Google Drive / Dropbox / WeTransfer require accounts or subscriptions for large files
+- AirDrop only works on Apple devices on the same network
+- USB drives require physical proximity
+
+Beam removes every one of those blockers. Open the page, drop your file, share a code or link — done. No app to install, no account to create, nothing to pay.
+
+---
+
+## Features
+
+- **Two transfer modes** — P2P for speed, Cloud for convenience
+- **No size limit** — P2P is unlimited; Cloud supports 20 GB+ files
+- **No account needed** — for sender or receiver
+- **Single-use download links** — Cloud links expire after first download
+- **Auto-delete** — Cloud files are deleted from storage immediately after download
+- **Expiry control** — Set how long a Cloud link stays valid (5 min to 24 hours)
+- **Per-file cancel** — Cancel individual downloads or all downloads at once
+- **Progress tracking** — Real upload/download progress bars
+- **Share anywhere** — Copy link, share via WhatsApp, email, QR code
+- **Fully private P2P** — In P2P mode files never leave the browser; only connection metadata touches a server
+- **Works on any device** — Pure HTML/CSS/JS, no framework, no build step
+
+---
+
+## Pros & Limitations
+
+### Pros
+- ✅ Completely free — no credit card, no subscription, no hidden limits
+- ✅ No installation — runs in any modern browser
+- ✅ P2P transfers are end-to-end encrypted via WebRTC DTLS
+- ✅ Cloud mode works even after the sender closes their tab
+- ✅ Files are deleted from cloud storage after the first download
+- ✅ Single-page app — one `index.html` file, self-hostable anywhere
+- ✅ No backend server to maintain for P2P (uses PeerJS public signalling)
+
+### Limitations
+- ⚠️ **P2P requires both sides online simultaneously** — if the sender closes their tab, the transfer stops
+- ⚠️ **P2P speed depends on network** — transfers between NAT-restricted networks may be slower (relayed via TURN)
+- ⚠️ **Cloud links are single-use** — once the receiver downloads, the link is gone (by design for privacy)
+- ⚠️ **Cloud files expire** — Filebin.net retains files for up to 6 days; set a shorter expiry if needed
+- ⚠️ **Cloud mode needs the Beam Worker** — the Cloudflare Worker must be deployed (see setup below); the hosted version at [indrajit-gitweb.github.io/beam-app](https://indrajit-gitweb.github.io/beam-app) already has this configured
+- ⚠️ **Browser memory for P2P** — very large files (multi-GB) in P2P mode are chunked but held in browser memory; Cloud mode is better for files over ~1 GB
+
+---
+
+## How to use it (no setup needed)
+
+### Sending a file
+
+1. Open Beam in your browser
+2. Choose **P2P** or **Cloud** tab under *Send*
+3. Drop your file (or click to browse)
+4. **P2P:** Share the 6-digit code with the receiver — they enter it on their device
+5. **Cloud:** Set an expiry time → click **Upload to Cloud** → copy the link and share it
+
+### Receiving a file
+
+- **P2P:** Enter the sender's 6-digit code in the *Receive* tab and wait for the transfer
+- **Cloud:** Open the link the sender shared — your browser downloads the file automatically
+
+---
+
+## Self-hosting
+
+Beam is a single HTML file. You can host it anywhere that serves static files.
+
+### Option 1 — GitHub Pages (simplest)
+
+1. Fork this repository
+2. Go to **Settings → Pages → Source → Deploy from branch → main**
+3. Your app is live at `https://<your-username>.github.io/beam-app/`
+
+### Option 2 — Any static host
+
+Upload `index.html` to Netlify, Vercel, Cloudflare Pages, an S3 bucket, or your own server. No build step required.
+
+### Option 3 — Run locally
+
+```bash
+git clone https://github.com/indrajit-gitweb/beam-app.git
+cd beam-app
+# Open index.html directly in your browser — no server needed for P2P mode
+open index.html
+```
+
+> **Note:** Cloud mode requires the Beam Worker (see below). P2P mode works with just `index.html`.
+
+---
+
+## Setting up Cloud mode (Beam Worker)
+
+Cloud mode is powered by a **Cloudflare Worker** that:
+1. Issues single-use download tokens (stored in Cloudflare KV)
+2. Proxies the download from Filebin.net and streams it to the receiver
+3. Deletes the file from Filebin after the first download
+4. Runs a cleanup cron every minute to purge expired tokens
+
+Everything runs on Cloudflare's **free tier** — no credit card required.
+
+### Prerequisites
+
+- A free [Cloudflare account](https://dash.cloudflare.com/sign-up) (no credit card)
+- Node.js 18 or later
+
+### Deploy steps
+
+```bash
+# 1. Install Wrangler (Cloudflare's CLI)
+cd beam-worker
+npm install
+
+# 2. Log in to Cloudflare
+npx wrangler login
+
+# 3. Create the KV namespace for tokens
+npx wrangler kv namespace create BEAM_EXPIRY
+# Copy the printed `id` into wrangler.toml under [[kv_namespaces]]
+
+# 4. Set your allowed origin (the URL where Beam is hosted)
+npx wrangler secret put BEAM_ALLOWED_ORIGIN
+# Enter: https://your-domain.com  (or * for testing)
+
+# 5. Deploy
+npm run deploy
+# Wrangler prints your Worker URL, e.g. https://beam-worker.yourname.workers.dev
+```
+
+### Wire the Worker URL into Beam
+
+Open `index.html` and update:
+
+```js
+const BEAM_WORKER_URL = 'https://beam-worker.YOUR-SUBDOMAIN.workers.dev';
+```
+
+Replace with the URL Wrangler printed, then re-deploy `index.html`.
+
+### Verify
+
+```bash
+curl https://beam-worker.<your-subdomain>.workers.dev/health
+# {"ok":true,"ts":...}
+```
+
+---
+
+## Project structure
+
+```
+beam-app/
+├── index.html              # The entire frontend — one file
+└── beam-worker/
+    ├── src/
+    │   └── index.js        # Cloudflare Worker (Cloud mode backend)
+    ├── wrangler.toml        # Worker config (KV binding, cron, name)
+    ├── package.json
+    └── DEPLOY.md           # Detailed Worker deployment guide
+```
+
+---
+
+## Dependencies
+
+### Frontend (`index.html`)
+
+| Dependency | Version | Purpose | Loaded from |
+|------------|---------|---------|-------------|
+| [PeerJS](https://peerjs.com) | 1.5.4 | WebRTC abstraction for P2P connections | unpkg CDN |
+| WebRTC | Browser built-in | Encrypted peer-to-peer data channel | — |
+| [Filebin.net](https://filebin.net) | — | Free anonymous file storage for Cloud mode | External API |
+
+No build tools, no npm packages, no bundler. The frontend is plain HTML + CSS + vanilla JS.
+
+### Backend (`beam-worker`)
+
+| Dependency | Version | Purpose |
+|------------|---------|---------|
+| [Wrangler](https://developers.cloudflare.com/workers/wrangler/) | ^4.87.0 | Cloudflare Workers CLI (dev only) |
+| Cloudflare Workers runtime | — | Serverless JS execution |
+| Cloudflare KV | — | Token storage (free tier: 1,000 writes/day) |
+
+No runtime npm dependencies — the Worker is pure JS with zero imports.
+
+---
+
+## Free tier limits
+
+| Service | Limit | Notes |
+|---------|-------|-------|
+| Cloudflare Workers | 100,000 requests/day | More than enough for personal use |
+| Cloudflare KV reads | 100,000/day | One read per download |
+| Cloudflare KV writes | 1,000/day | One write per upload |
+| Filebin.net storage | No documented limit | Files auto-deleted after download |
+| Filebin.net retention | 6 days | Reset on each access; cron cleans up on expiry |
+| PeerJS signalling | Free public server | `0.peerjs.com` — no account needed |
+
+---
+
+## Tech stack
+
+- **Frontend:** Vanilla HTML5 / CSS3 / JavaScript (ES2020+) — no framework
+- **P2P:** WebRTC via [PeerJS](https://peerjs.com) (signalling through `0.peerjs.com`)
+- **Cloud storage:** [Filebin.net](https://filebin.net) — free, anonymous, no account
+- **Cloud backend:** [Cloudflare Workers](https://workers.cloudflare.com/) + KV — free tier
+- **Hosting:** GitHub Pages (static)
+
+---
+
+## License
+
+MIT — free to use, modify, and self-host.
