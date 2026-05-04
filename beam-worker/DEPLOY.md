@@ -1,9 +1,10 @@
 # Deploying Beam Worker to Cloudflare
 
 This Worker handles Cloud Transfer mode for Beam:
-- Accepts file uploads and pushes them to MEGA (anonymously, no account needed)
-- Stores expiry records in Cloudflare KV
-- Deletes expired MEGA files every minute via cron trigger
+- **Metadata-only gatekeeper** — the browser uploads files directly to MEGA (no file bytes pass through the Worker)
+- Accepts `POST /register` with MEGA share credentials after the browser finishes uploading, stores a single-use download token in Cloudflare KV
+- Serves `GET /download/:token` — validates, marks single-use, returns the MEGA share URL to the receiver
+- Schedules MEGA file deletion 5 minutes after first download via cron trigger
 
 ---
 
@@ -96,7 +97,7 @@ https://beam-worker.<your-subdomain>.workers.dev
 
 ## Step 6 — Wire the Worker URL into Beam
 
-Open `beam/index.html` (or `outputs/beam.html`) and find:
+Open `index.html` and find:
 
 ```javascript
 const BEAM_WORKER_URL = 'https://beam-worker.YOUR-SUBDOMAIN.workers.dev';
@@ -137,10 +138,7 @@ Wrangler starts a local server at `http://localhost:8787`. The cron won't trigge
 
 For typical Beam usage (occasional file shares), the free plan is more than enough.
 
-**Important**: Cloudflare Workers on the free plan have a **25 MB request body limit**.
-Files larger than 25 MB should use Beam's P2P mode instead.
-
-On the **paid plan (Workers Paid, $5/mo)**, the body limit increases to 500 MB.
+**Note**: The Worker never receives file bytes — files upload from the browser directly to MEGA. There is no Worker body-size limit for uploads. The free plan is sufficient for any file size.
 
 ---
 

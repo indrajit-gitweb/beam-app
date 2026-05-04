@@ -1,7 +1,7 @@
 name = "beam-worker"
 main = "src/index.js"
 compatibility_date = "2024-09-23"
-compatibility_flags = ["nodejs_compat"]
+# nodejs_compat no longer needed — Worker uses only Web APIs (no megajs)
 
 # --------------------------------------------------------------------------
 # KV namespace — stores expiry records for uploaded files

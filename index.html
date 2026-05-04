@@ -498,7 +498,7 @@
           <div class="mode-card cloud" id="mode-cloud" role="button" tabindex="0" onclick="selectMode('cloud')" onkeydown="if(event.key==='Enter')selectMode('cloud')">
             <div class="mode-card-icon">☁️</div>
             <div class="mode-card-name">Cloud Transfer</div>
-            <div class="mode-card-desc">Upload to MEGA · Sender can close tab · Auto-expires</div>
+            <div class="mode-card-desc">Upload to cloud · Sender can close tab · Auto-expires</div>
           </div>
         </div>
       </div>
@@ -535,10 +535,10 @@
         </div>
       </div>
 
-      <!-- MEGA upload error -->
+      <!-- Cloud upload error -->
       <div id="mega-error-box" class="mega-error-box" style="display:none">
         <div class="mega-error-title">☁️ Upload failed</div>
-        <div class="mega-error-body" id="mega-error-body">Could not upload to MEGA. Try P2P mode instead.</div>
+        <div class="mega-error-body" id="mega-error-body">Could not upload to cloud storage. Try P2P mode instead.</div>
         <button class="mega-switch-p2p" id="mega-switch-p2p">⚡ Switch to P2P</button>
       </div>
 
@@ -680,7 +680,7 @@
       <div id="cloud-recv-section" style="display:none">
         <div class="cloud-recv-badge">☁️ Cloud Transfer</div>
         <div id="cloud-recv-files" class="cloud-recv-files"></div>
-        <button class="cloud-recv-all-btn" id="cloud-recv-all-btn">☁️ Download All from MEGA</button>
+        <button class="cloud-recv-all-btn" id="cloud-recv-all-btn">☁️ Download All</button>
         <div class="cloud-expiry-info" id="cloud-expiry-info" style="display:none"></div>
       </div>
 
@@ -768,7 +768,7 @@
     </div>
     <div class="cloud-note-strip">
       <span class="cns-icon">☁️</span>
-      <p class="cns-text"><strong>Cloud mode eliminates this.</strong> Files upload to MEGA (anonymous, encrypted) via a Cloudflare Worker. The sender shares a cloud link and can close their tab immediately. The receiver downloads directly from MEGA any time before the link expires. Requires <a href="beam-worker/DEPLOY.md" style="color:#38bdf8">deploying the Beam Worker</a>.</p>
+      <p class="cns-text"><strong>Cloud mode eliminates this.</strong> Files are uploaded via the Beam Worker to anonymous cloud storage. The sender shares a link and can close their tab immediately. The receiver downloads any time before the link expires — file is deleted automatically after first download. Requires <a href="beam-worker/DEPLOY.md" style="color:#38bdf8">deploying the Beam Worker</a>.</p>
     </div>
   </section>
 
@@ -1289,7 +1289,7 @@ async function startCloudUpload() {
   cloudUploadProg.innerHTML = '';
   megaErrorBox.style.display = 'none';
   cloudLinkDisplay.style.display = 'none';
-  setStatus(sendStatus, `⬆️ Uploading ${filesToSend.length} file${filesToSend.length !== 1 ? 's' : ''} to MEGA…`, 'info');
+  setStatus(sendStatus, `⬆️ Uploading ${filesToSend.length} file${filesToSend.length !== 1 ? 's' : ''} to cloud…`, 'info');
 
   const uploadedFiles = [];
 
@@ -1351,11 +1351,9 @@ async function startCloudUpload() {
   showCloudLink(cloudUrl, expiresAt);
 }
 
-// Upload directly from browser to MEGA (no size limit — Worker never sees the bytes)
-// Then register the MEGA credentials with the Worker so it can manage tokens + deletion.
+// Upload file via the Cloudflare Worker (Worker proxies to transfer.sh server-side).
+// This avoids all browser CORS issues — the Worker handles the external request.
 async function uploadFileToWorker(file, expiryMinutes) {
-  // File bytes go to the Worker which uploads to MEGA server-side.
-  // MEGA's API blocks browser-direct requests (CORS), so Worker handles it.
   const res = await fetch(`${BEAM_WORKER_URL}/upload`, {
     method: 'POST',
     headers: {
@@ -1365,9 +1363,10 @@ async function uploadFileToWorker(file, expiryMinutes) {
     },
     body: file,
   });
+
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Worker error: HTTP ${res.status}`);
+    throw new Error(err.error || `Upload failed (HTTP ${res.status}). Try again or use P2P mode.`);
   }
   return res.json(); // { ok, token, expiresAt }
 }
@@ -1388,7 +1387,7 @@ function showCloudLink(url, expiresAt) {
 
   setupShareLinks(null, url);
   shareVia.style.display = 'block';
-  setStatus(sendStatus, '✅ Cloud link ready — share it! Receiver downloads directly from MEGA.', 'success');
+  setStatus(sendStatus, '✅ Cloud link ready — share it! File deletes automatically after download.', 'success');
 
   showPopup('☁️', 'Cloud link ready!', 'Share the link. Receiver can download at any time before it expires.', 'success', 8000);
 }
@@ -1465,9 +1464,10 @@ function handleCloudLinkParam(param) {
     const cloudFiles = data.files;
     const isV2 = data.v === 2;
 
-    // Helper: call Worker to validate token + get MEGA URL, then open it
+    // Helper: call Worker to validate token + get transfer.sh URL, then open it.
     // v2: Worker /download/{token} returns JSON { ok, url, filename, size }
-    // v1 (legacy): f.l is already the direct MEGA share URL
+    //     Worker also fires DELETE to transfer.sh immediately (single-use).
+    // v1 (legacy): f.l is already a direct cloud URL
     async function triggerDownload(f) {
       if (!isV2) {
         window.open(f.l, '_blank', 'noopener');
@@ -1487,10 +1487,10 @@ function handleCloudLinkParam(param) {
           return;
         }
 
-        // Open the MEGA share URL — receiver downloads via MEGA's own interface
+        // Open the transfer.sh download URL directly — browser downloads the file
         window.open(json.url, '_blank', 'noopener');
-        if (btn) { btn.textContent = '✓ Opened — file deletes in ~5 min'; btn.disabled = true; }
-        setStatus(recvStatus, '✅ Download opened. File will be deleted from cloud in ~5 minutes.', 'ok');
+        if (btn) { btn.textContent = '✓ Downloading…'; btn.disabled = true; }
+        setStatus(recvStatus, '✅ Download started. File has been deleted from cloud.', 'ok');
 
       } catch (err) {
         if (btn) { btn.textContent = '✗ Error'; btn.disabled = false; }
@@ -1516,7 +1516,7 @@ function handleCloudLinkParam(param) {
     // Expiry countdown
     const ms   = data.e - Date.now();
     const mins = Math.ceil(ms / 60000);
-    cloudExpiryInfo.textContent = `⏱ Link expires in ${mins} minute${mins !== 1 ? 's' : ''}. File is deleted from cloud 5 min after first download.`;
+    cloudExpiryInfo.textContent = `⏱ Link expires in ${mins} minute${mins !== 1 ? 's' : ''}. File is deleted from cloud immediately after first download.`;
     cloudExpiryInfo.style.display = 'block';
 
     cloudRecvAllBtn.addEventListener('click', () => {
@@ -1524,7 +1524,7 @@ function handleCloudLinkParam(param) {
     });
 
     cloudRecvSection.style.display = 'block';
-    setStatus(recvStatus, `☁️ ${cloudFiles.length} file${cloudFiles.length !== 1 ? 's' : ''} ready — click Download to open in MEGA. File deletes automatically after.`, 'info');
+    setStatus(recvStatus, `☁️ ${cloudFiles.length} file${cloudFiles.length !== 1 ? 's' : ''} ready — click Download. File deletes from cloud automatically after download.`, 'info');
 
   } catch (_) {
     linkExpiredScreen.style.display = 'block';
