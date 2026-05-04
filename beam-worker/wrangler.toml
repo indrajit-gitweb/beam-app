@@ -1,27 +1,23 @@
-name = "beam-worker"
-main = "src/index.js"
-compatibility_date = "2024-09-23"
-# nodejs_compat no longer needed — Worker uses only Web APIs (no megajs)
+name             = "beam-worker"
+main             = "src/index.js"
+compatibility_date = "2025-01-01"
 
-# --------------------------------------------------------------------------
-# KV namespace — stores expiry records for uploaded files
-# Run `wrangler kv namespace create BEAM_EXPIRY` to get your namespace ID,
-# then paste it below (and optionally add a preview_id for local dev).
-# --------------------------------------------------------------------------
+# ── R2 bucket — stores uploaded file chunks (up to 5 TB per file, 10 GB-mo free) ──
+[[r2_buckets]]
+binding     = "BEAM_BUCKET"
+bucket_name = "beam-files"
+# preview_bucket_name = "beam-files-dev"   # optional, for `wrangler dev`
+
+# ── KV namespace — stores single-use download tokens ─────────────────────────
 [[kv_namespaces]]
 binding = "BEAM_EXPIRY"
 id      = "1e017e87467341288d06807340155b2a"
-# preview_id = "REPLACE_WITH_YOUR_KV_PREVIEW_ID"   # optional, for `wrangler dev`
+# preview_id = ""   # optional, for `wrangler dev`
 
-# --------------------------------------------------------------------------
-# Cron trigger — runs cleanup every minute, 24/7
-# --------------------------------------------------------------------------
+# ── Cron — clean up expired R2 objects every minute ──────────────────────────
 [triggers]
 crons = ["* * * * *"]
 
-# --------------------------------------------------------------------------
-# Environment variables (set secrets via `wrangler secret put`)
-# --------------------------------------------------------------------------
-# BEAM_ALLOWED_ORIGIN — CORS origin your Beam page is served from.
-# Set via: wrangler secret put BEAM_ALLOWED_ORIGIN
-# Example value: https://yourdomain.com  (or * for local testing only)
+# ── Secrets (set via `wrangler secret put`) ───────────────────────────────────
+# BEAM_ALLOWED_ORIGIN  — CORS origin your Beam page is served from
+#   e.g. wrangler secret put BEAM_ALLOWED_ORIGIN  →  https://yourdomain.com

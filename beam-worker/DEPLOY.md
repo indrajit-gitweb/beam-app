@@ -1,10 +1,10 @@
 # Deploying Beam Worker to Cloudflare
 
 This Worker handles Cloud Transfer mode for Beam:
-- **Metadata-only gatekeeper** — the browser uploads files directly to MEGA (no file bytes pass through the Worker)
-- Accepts `POST /register` with MEGA share credentials after the browser finishes uploading, stores a single-use download token in Cloudflare KV
-- Serves `GET /download/:token` — validates, marks single-use, returns the MEGA share URL to the receiver
-- Schedules MEGA file deletion 5 minutes after first download via cron trigger
+- **No size limit** — files upload in 50 MB chunks via R2 multipart (supports 20 GB+ files)
+- Browser splits the file into chunks → each chunk goes to the Worker → Worker assembles in **Cloudflare R2** (free object storage, up to 5 TB per file, 10 GB-month free tier)
+- Receiver hits `/download/:token` → Worker streams R2 object directly to the browser, then deletes it
+- Single-use download tokens stored in **Cloudflare KV**, expire automatically
 
 ---
 
@@ -30,72 +30,66 @@ npm install
 npx wrangler login
 ```
 
-This opens a browser window. Authorise Wrangler to access your Cloudflare account.
+---
+
+## Step 3 — Create the R2 bucket
+
+```bash
+npx wrangler r2 bucket create beam-files
+```
+
+The bucket name **must match** the `bucket_name` in `wrangler.toml` (`beam-files`).
 
 ---
 
-## Step 3 — Create the KV namespace
+## Step 4 — Create the KV namespace
 
 ```bash
 npx wrangler kv namespace create BEAM_EXPIRY
 ```
 
-Wrangler will print something like:
+Wrangler prints something like:
 
 ```
-🌀 Creating namespace with title "beam-worker-BEAM_EXPIRY"
-✨ Success!
-Add the following to your configuration file in your kv_namespaces array:
+✨ Success! Add the following to your wrangler.toml:
 { binding = "BEAM_EXPIRY", id = "abc123..." }
 ```
 
-**Copy the `id` value** and paste it into `wrangler.toml`:
+**Copy the `id`** and paste it into `wrangler.toml`:
 
 ```toml
 [[kv_namespaces]]
 binding = "BEAM_EXPIRY"
-id      = "abc123..."   # ← paste here
+id      = "abc123..."   # paste here
 ```
-
-*(Optional)* Create a preview namespace for local `wrangler dev`:
-
-```bash
-npx wrangler kv namespace create BEAM_EXPIRY --preview
-```
-
-Paste that ID as `preview_id` in `wrangler.toml`.
 
 ---
 
-## Step 4 — Set the CORS allowed origin (secret)
-
-Replace `https://yourdomain.com` with wherever your Beam page is hosted
-(e.g. a GitHub Pages URL, a Vercel URL, or `*` for testing):
+## Step 5 — Set the CORS allowed origin
 
 ```bash
 npx wrangler secret put BEAM_ALLOWED_ORIGIN
 # When prompted, enter: https://yourdomain.com
+# (or * for local/quick testing only)
 ```
 
 ---
 
-## Step 5 — Deploy
+## Step 6 — Deploy
 
 ```bash
 npm run deploy
 ```
 
-Wrangler will print your Worker URL, e.g.:
+Wrangler prints your Worker URL, e.g.:
 
 ```
 https://beam-worker.<your-subdomain>.workers.dev
 ```
 
-**Copy this URL** — you'll need it in the Beam app (`BEAM_WORKER_URL` constant in `index.html`).
-
 ---
 
-## Step 6 — Wire the Worker URL into Beam
+## Step 7 — Wire the Worker URL into Beam
 
 Open `index.html` and find:
 
@@ -103,18 +97,15 @@ Open `index.html` and find:
 const BEAM_WORKER_URL = 'https://beam-worker.YOUR-SUBDOMAIN.workers.dev';
 ```
 
-Replace the placeholder with your actual Worker URL. Save, re-deploy Beam.
+Replace with your actual Worker URL. Save and re-deploy Beam.
 
 ---
 
-## Step 7 — Verify it works
+## Step 8 — Verify
 
 ```bash
-# Health check
 curl https://beam-worker.<your-subdomain>.workers.dev/health
-
-# Expected:
-# {"ok":true,"ts":1234567890123}
+# Expected: {"ok":true,"ts":...}
 ```
 
 ---
@@ -125,20 +116,24 @@ curl https://beam-worker.<your-subdomain>.workers.dev/health
 npm run dev
 ```
 
-Wrangler starts a local server at `http://localhost:8787`. The cron won't trigger automatically locally — use `wrangler dev --test-scheduled` and visit `http://localhost:8787/__scheduled?cron=*+*+*+*+*` to trigger it manually.
+Wrangler starts a local server at `http://localhost:8787`.
+Use `wrangler dev --test-scheduled` and visit `/__scheduled?cron=*+*+*+*+*` to trigger the cron manually.
 
 ---
 
-## Pricing / limits
+## Free tier limits
 
-| Plan       | Requests/day | KV reads/day | KV writes/day | Cron invocations |
-|------------|-------------|--------------|---------------|------------------|
-| Free       | 100,000      | 100,000       | 1,000         | unlimited        |
-| Paid ($5+) | 10M          | 10M           | 1M            | unlimited        |
+| Resource       | Free allowance / month      |
+|----------------|-----------------------------|
+| R2 storage     | 10 GB-month                 |
+| R2 Class A ops | 1,000,000 (PUT/POST)        |
+| R2 Class B ops | 10,000,000 (GET)            |
+| R2 egress      | **Free** (no egress fees)   |
+| Worker requests| 100,000 / day               |
+| KV reads       | 100,000 / day               |
+| KV writes      | 1,000 / day                 |
 
-For typical Beam usage (occasional file shares), the free plan is more than enough.
-
-**Note**: The Worker never receives file bytes — files upload from the browser directly to MEGA. There is no Worker body-size limit for uploads. The free plan is sufficient for any file size.
+Files are deleted from R2 after first download (or at expiry), so storage is used only briefly per transfer. The free tier is sufficient for regular use at any file size.
 
 ---
 
@@ -149,5 +144,6 @@ For typical Beam usage (occasional file shares), the free plan is more than enou
 | `wrangler: command not found` | Run `npm install` first, then use `npx wrangler` |
 | CORS errors in browser | Check `BEAM_ALLOWED_ORIGIN` secret matches your Beam page origin exactly |
 | KV write errors | Confirm the `id` in `wrangler.toml` matches the namespace you created |
-| MEGA upload fails | MEGA's anonymous API is occasionally rate-limited — retry or switch to P2P |
-| Cron not firing | Crons only run on deployed Workers, not `wrangler dev` — use `--test-scheduled` flag |
+| R2 not found | Run `wrangler r2 bucket create beam-files` and redeploy |
+| Upload fails mid-way | Parts retry up to 3x automatically; check Worker logs with `npm run tail` |
+| Cron not firing | Crons only run on deployed Workers, not `wrangler dev` |

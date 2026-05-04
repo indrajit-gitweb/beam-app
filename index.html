@@ -768,7 +768,7 @@
     </div>
     <div class="cloud-note-strip">
       <span class="cns-icon">☁️</span>
-      <p class="cns-text"><strong>Cloud mode eliminates this.</strong> Files are uploaded via the Beam Worker to anonymous cloud storage. The sender shares a link and can close their tab immediately. The receiver downloads any time before the link expires — file is deleted automatically after first download. Requires <a href="beam-worker/DEPLOY.md" style="color:#38bdf8">deploying the Beam Worker</a>.</p>
+      <p class="cns-text"><strong>Cloud mode eliminates this.</strong> Files upload in 50 MB chunks to Cloudflare R2 (free, no account for receivers, up to 20 GB+). The sender shares a link and can close their tab immediately. The receiver downloads any time before expiry — file is deleted automatically after first download. Requires <a href="beam-worker/DEPLOY.md" style="color:#38bdf8">deploying the Beam Worker</a>.</p>
     </div>
   </section>
 
@@ -1296,14 +1296,14 @@ async function startCloudUpload() {
   for (let i = 0; i < filesToSend.length; i++) {
     const file = filesToSend[i];
 
-    // Build per-file progress row
+    // Build per-file progress row with real chunk counter
     const cupEl = document.createElement('div');
     cupEl.className = 'cup-file';
     cupEl.innerHTML = `
       <div class="cup-file-row">
         <span class="cup-file-icon">${fileIcon(file.name, file.type)}</span>
         <span class="cup-file-name">${file.name}</span>
-        <span class="cup-file-status uploading" id="cup-status-${i}">Uploading…</span>
+        <span class="cup-file-status uploading" id="cup-status-${i}">Starting…</span>
       </div>
       <div class="cup-progress-bar"><div class="cup-progress-fill" id="cup-fill-${i}"></div></div>
     `;
@@ -1312,26 +1312,19 @@ async function startCloudUpload() {
     const fillEl   = document.getElementById(`cup-fill-${i}`);
     const statusEl = document.getElementById(`cup-status-${i}`);
 
-    // Animate fake progress while waiting for Worker response
-    let fake = 0;
-    const fakeTimer = setInterval(() => {
-      if (fake < 82) { fake += Math.random() * 9 + 1; fillEl.style.width = Math.min(fake, 82) + '%'; }
-    }, 250);
-
     try {
-      const result = await uploadFileToWorker(file, selectedExpiryMinutes);
-      clearInterval(fakeTimer);
+      const result = await uploadFileToWorker(file, selectedExpiryMinutes, (pct, label) => {
+        fillEl.style.width = pct + '%';
+        statusEl.textContent = label;
+      });
       fillEl.style.width = '100%';
       statusEl.className = 'cup-file-status done';
       statusEl.textContent = '✓ Done';
-      // Store the download token (not the MEGA URL) — receiver downloads via Worker
       uploadedFiles.push({ l: result.token, n: file.name, s: file.size, t: file.type });
 
     } catch (err) {
-      clearInterval(fakeTimer);
       statusEl.className = 'cup-file-status error';
       statusEl.textContent = '✗ Failed';
-
       megaErrorBox.style.display = 'block';
       megaErrorBody.textContent = err.message || 'Upload failed. Try P2P mode.';
       cloudUploadBtn.disabled   = false;
@@ -1344,31 +1337,80 @@ async function startCloudUpload() {
   }
 
   // All files uploaded — encode cloud link (v:2 uses Worker download tokens)
-  const expiresAt    = Date.now() + selectedExpiryMinutes * 60 * 1000;
-  const cloudParam   = encodeCloudParam({ v: 2, files: uploadedFiles, e: expiresAt });
-  const cloudUrl     = `${location.origin}${location.pathname}?c=${cloudParam}`;
+  const expiresAt  = Date.now() + selectedExpiryMinutes * 60 * 1000;
+  const cloudParam = encodeCloudParam({ v: 2, files: uploadedFiles, e: expiresAt });
+  const cloudUrl   = `${location.origin}${location.pathname}?c=${cloudParam}`;
 
   showCloudLink(cloudUrl, expiresAt);
 }
 
-// Upload file via the Cloudflare Worker (Worker proxies to transfer.sh server-side).
-// This avoids all browser CORS issues — the Worker handles the external request.
-async function uploadFileToWorker(file, expiryMinutes) {
-  const res = await fetch(`${BEAM_WORKER_URL}/upload`, {
-    method: 'POST',
-    headers: {
-      'Content-Type':          'application/octet-stream',
-      'X-Beam-Expiry-Minutes': String(expiryMinutes),
-      'X-Beam-Filename':       encodeURIComponent(file.name),
-    },
-    body: file,
-  });
+// Chunked multipart upload to Cloudflare Worker → R2.
+// Splits the file into 50 MB slices; each slice is a separate POST /upload/part.
+// No browser size limit — works for files from 1 byte to 20 GB+.
+const CHUNK_SIZE = 50 * 1024 * 1024; // 50 MB
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Upload failed (HTTP ${res.status}). Try again or use P2P mode.`);
+async function uploadFileToWorker(file, expiryMinutes, onProgress) {
+
+  // ── Step 1: Init multipart upload ──────────────────────────────────────────
+  onProgress(2, 'Connecting…');
+  const initRes = await fetch(`${BEAM_WORKER_URL}/upload/init`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ filename: file.name, size: file.size, type: file.type || '' }),
+  });
+  if (!initRes.ok) {
+    const e = await initRes.json().catch(() => ({}));
+    throw new Error(e.error || `Init failed (HTTP ${initRes.status})`);
   }
-  return res.json(); // { ok, token, expiresAt }
+  const { key, uploadId } = await initRes.json();
+
+  // ── Step 2: Upload chunks ───────────────────────────────────────────────────
+  const totalParts = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+  const parts      = [];
+
+  for (let i = 0; i < totalParts; i++) {
+    const start = i * CHUNK_SIZE;
+    const chunk = file.slice(start, start + CHUNK_SIZE);
+    const pct   = Math.round(((i + 0.5) / totalParts) * 94) + 2; // 2–96%
+    onProgress(pct, `Part ${i + 1} / ${totalParts}  (${formatBytes(start + chunk.size)} of ${formatBytes(file.size)})`);
+
+    let partRes;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      partRes = await fetch(`${BEAM_WORKER_URL}/upload/part`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':          'application/octet-stream',
+          'X-Beam-Key':            key,
+          'X-Beam-Upload-Id':      uploadId,
+          'X-Beam-Part-Number':    String(i + 1),
+        },
+        body: chunk,
+      });
+      if (partRes.ok) break;
+      if (attempt === 3) {
+        const e = await partRes.json().catch(() => ({}));
+        throw new Error(e.error || `Part ${i + 1} failed after 3 attempts (HTTP ${partRes.status})`);
+      }
+      await new Promise(r => setTimeout(r, 800 * attempt)); // back-off
+    }
+
+    const { partNumber, etag } = await partRes.json();
+    parts.push({ partNumber, etag });
+  }
+
+  // ── Step 3: Complete multipart upload ──────────────────────────────────────
+  onProgress(97, 'Finalising…');
+  const completeRes = await fetch(`${BEAM_WORKER_URL}/upload/complete`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ key, uploadId, parts, filename: file.name, size: file.size, expiryMinutes }),
+  });
+  if (!completeRes.ok) {
+    const e = await completeRes.json().catch(() => ({}));
+    throw new Error(e.error || `Complete failed (HTTP ${completeRes.status})`);
+  }
+  onProgress(100, 'Done');
+  return completeRes.json(); // { ok, token, expiresAt }
 }
 
 function showCloudLink(url, expiresAt) {
@@ -1464,38 +1506,36 @@ function handleCloudLinkParam(param) {
     const cloudFiles = data.files;
     const isV2 = data.v === 2;
 
-    // Helper: call Worker to validate token + get transfer.sh URL, then open it.
-    // v2: Worker /download/{token} returns JSON { ok, url, filename, size }
-    //     Worker also fires DELETE to transfer.sh immediately (single-use).
-    // v1 (legacy): f.l is already a direct cloud URL
-    async function triggerDownload(f) {
+    // v2: Worker /download/{token} streams the file directly (R2 → Worker → browser).
+    //     The anchor click triggers a native browser download — no JS memory buffering,
+    //     works for files of any size (1 byte to 20 GB+).
+    // v1 (legacy): f.l is already a direct cloud URL.
+    function triggerDownload(f) {
       if (!isV2) {
         window.open(f.l, '_blank', 'noopener');
         return;
       }
       const btn = document.getElementById(`dl-btn-${f.l}`);
-      if (btn) { btn.textContent = '⏳ Checking…'; btn.disabled = true; }
+      if (btn) { btn.textContent = '⬇️ Downloading…'; btn.disabled = true; }
 
-      try {
-        const res = await fetch(`${BEAM_WORKER_URL}/download/${f.l}`);
-        const json = await res.json();
+      // Use an anchor with `download` attribute so the browser saves to disk
+      // without loading the whole file into JS memory.
+      const a = Object.assign(document.createElement('a'), {
+        href:     `${BEAM_WORKER_URL}/download/${f.l}`,
+        download: f.n,
+        target:   '_blank',
+        rel:      'noopener noreferrer',
+      });
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
 
-        if (!res.ok || !json.url) {
-          const msg = json.message || 'Link expired or already downloaded.';
-          if (btn) { btn.textContent = '✗ ' + msg; }
-          setStatus(recvStatus, '⚠️ ' + msg, 'error');
-          return;
-        }
+      setStatus(recvStatus, `⬇️ Downloading "${f.n}" — your browser will prompt you to save the file.`, 'info');
 
-        // Open the transfer.sh download URL directly — browser downloads the file
-        window.open(json.url, '_blank', 'noopener');
-        if (btn) { btn.textContent = '✓ Downloading…'; btn.disabled = true; }
-        setStatus(recvStatus, '✅ Download started. File has been deleted from cloud.', 'ok');
-
-      } catch (err) {
-        if (btn) { btn.textContent = '✗ Error'; btn.disabled = false; }
-        setStatus(recvStatus, '⚠️ Could not reach server. Check your connection.', 'error');
-      }
+      // Re-enable after a delay (in case the user wants to see the error page)
+      setTimeout(() => {
+        if (btn) { btn.textContent = '✓ Started'; }
+      }, 2500);
     }
 
     cloudFiles.forEach(f => {
