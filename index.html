@@ -55,6 +55,9 @@
     @keyframes orb-drift-b { from { transform: translate(0,0) scale(1); } to { transform: translate(-40px,-50px) scale(1.06); } }
     @keyframes orb-drift-c { from { transform: translate(-50%,-50%) scale(1); } to { transform: translate(-50%,-50%) scale(1.5); opacity: .5; } }
 
+    /* ── Circuit canvas ── */
+    #circuit-bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+
     /* ── Page wrapper ── */
     .page { position: relative; z-index: 1; width: 100%; max-width: 540px; display: flex; flex-direction: column; align-items: center; }
 
@@ -450,6 +453,8 @@
   </style>
 </head>
 <body>
+
+<canvas id="circuit-bg" aria-hidden="true"></canvas>
 
 <div class="bg-orb bg-orb-1"></div>
 <div class="bg-orb bg-orb-2"></div>
@@ -879,6 +884,258 @@
   </footer>
 
 </div><!-- /page -->
+
+<script>
+/* ── Circuit board background ─────────────────────────────────────────────── */
+(function circuitBg() {
+  const cvs = document.getElementById('circuit-bg');
+  const ctx = cvs.getContext('2d');
+
+  const CELL    = 60;    // grid cell size (px)
+  const N_PULSE = 52;    // number of simultaneous data pulses
+  const TAIL    = 16;    // tail length in stored positions
+  // Cyberpunk cyan / electric-blue palette  (RGB triplets)
+  const COLORS  = [
+    [0, 255, 255],   // pure cyan
+    [0, 220, 255],   // cyan-blue
+    [0, 180, 255],   // electric blue
+    [14, 165, 233],  // sky blue
+    [56, 189, 248],  // light cyan
+    [34, 211, 238],  // teal-cyan
+    [103, 232, 249], // pale ice
+    [0, 245, 255],   // neon teal
+  ];
+
+  let W, H, nodes = [], edges = [], pulses = [];
+  let mouse = { x: -1, y: -1, on: false };
+  let scrollVel = 0, lastSY = 0, svTimer, resizeTimer, raf;
+
+  // ── Build the circuit grid ──────────────────────────────
+  function buildGrid() {
+    cancelAnimationFrame(raf);
+    W = cvs.width  = window.innerWidth;
+    H = cvs.height = window.innerHeight;
+
+    // Stamp dark base so first frame isn't blank
+    ctx.fillStyle = '#06060f';
+    ctx.fillRect(0, 0, W, H);
+
+    const cols = Math.ceil(W / CELL) + 2;
+    const rows = Math.ceil(H / CELL) + 2;
+    nodes = [];
+    edges = [];
+
+    // Nodes with subtle position jitter for organic PCB look
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++)
+        nodes.push({
+          x: c * CELL - CELL * 0.5 + (Math.random() * 10 - 5),
+          y: r * CELL - CELL * 0.5 + (Math.random() * 10 - 5),
+          conns: []
+        });
+
+    const id = (c, r) => r * cols + c;
+
+    function link(a, b) {
+      if (nodes[a].conns.includes(b)) return;
+      edges.push([a, b]);
+      nodes[a].conns.push(b);
+      nodes[b].conns.push(a);
+    }
+
+    // ~55 % horizontal connections — leaves deliberate gaps like a real PCB
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols - 1; c++)
+        if (Math.random() < 0.55) link(id(c, r), id(c + 1, r));
+
+    // ~55 % vertical connections
+    for (let r = 0; r < rows - 1; r++)
+      for (let c = 0; c < cols; c++)
+        if (Math.random() < 0.55) link(id(c, r), id(c, r + 1));
+
+    // Guarantee every node has ≥ 1 connection so pulses never get stuck
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++) {
+        const i = id(c, r);
+        if (!nodes[i].conns.length)
+          link(i, c < cols - 1 ? id(c + 1, r) : id(c - 1, r));
+      }
+
+    pulses = Array.from({ length: N_PULSE }, () => new Pulse(true));
+    raf = requestAnimationFrame(frame);
+  }
+
+  // ── Data pulse ─────────────────────────────────────────
+  class Pulse {
+    constructor(stagger) {
+      this.spawn();
+      if (stagger) this.t = Math.random(); // spread across the grid at boot
+    }
+
+    spawn() {
+      let s;
+      do s = (Math.random() * nodes.length) | 0;
+      while (!nodes[s].conns.length);
+
+      this.from  = s;
+      this.prev  = -1;
+      this.to    = nodes[s].conns[(Math.random() * nodes[s].conns.length) | 0];
+      this.t     = 0;
+      this.speed = 0.004 + Math.random() * 0.01;   // async speeds
+      this.rgb   = COLORS[(Math.random() * COLORS.length) | 0];
+      this.sz    = 2 + Math.random() * 2.5;         // varied sizes
+      this.alpha = 0.55 + Math.random() * 0.45;
+      this.trail = [];
+    }
+
+    step() {
+      const fa = nodes[this.from], fb = nodes[this.to];
+      const px = fa.x + (fb.x - fa.x) * this.t;
+      const py = fa.y + (fb.y - fa.y) * this.t;
+
+      // Speed: base + scroll boost + mouse-proximity boost
+      let spd = this.speed + scrollVel * 0.001;
+      if (mouse.on) {
+        const dx = px - mouse.x, dy = py - mouse.y;
+        const d  = Math.sqrt(dx * dx + dy * dy);
+        if (d < 170) spd += this.speed * (1 - d / 170) * 2.2;
+      }
+
+      this.trail.unshift({ x: px, y: py });
+      if (this.trail.length > TAIL) this.trail.pop();
+
+      this.t += spd;
+      if (this.t >= 1) {
+        this.prev = this.from;
+        this.from = this.to;
+        const opts = nodes[this.from].conns.filter(n => n !== this.prev);
+        // Prefer forward; bounce at dead ends
+        this.to = opts.length
+          ? opts[(Math.random() * opts.length) | 0]
+          : this.prev;
+        this.t = 0;
+      }
+    }
+
+    draw() {
+      const [r, g, b] = this.rgb;
+      const head = this.trail[0];
+      if (!head) return;
+
+      // Fading tail dots (quadratic falloff → bright near head, whisper at tip)
+      for (let i = 1; i < this.trail.length; i++) {
+        const f  = 1 - i / this.trail.length;
+        const ta = this.alpha * f * f * 0.65;
+        const ts = Math.max(this.sz * f * 0.55, 0.4);
+        ctx.beginPath();
+        ctx.arc(this.trail[i].x, this.trail[i].y, ts, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${r},${g},${b},${ta.toFixed(3)})`;
+        ctx.fill();
+      }
+
+      // Soft outer halo
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, this.sz * 5, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${r},${g},${b},${(this.alpha * 0.06).toFixed(3)})`;
+      ctx.fill();
+
+      // Inner glow ring
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, this.sz * 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${r},${g},${b},${(this.alpha * 0.28).toFixed(3)})`;
+      ctx.fill();
+
+      // Bright core
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, this.sz, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${r},${g},${b},${this.alpha.toFixed(3)})`;
+      ctx.fill();
+
+      // White-hot nucleus
+      ctx.beginPath();
+      ctx.arc(head.x, head.y, this.sz * 0.38, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255,255,255,${(this.alpha * 0.85).toFixed(3)})`;
+      ctx.fill();
+    }
+  }
+
+  // ── Draw static circuit traces ──────────────────────────
+  function drawTraces() {
+    // All edges in a single batched path — very fast
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(0,210,255,0.048)';
+    ctx.lineWidth   = 1;
+    for (const [a, b] of edges) {
+      ctx.moveTo(nodes[a].x, nodes[a].y);
+      ctx.lineTo(nodes[b].x, nodes[b].y);
+    }
+    ctx.stroke();
+
+    // Junction dots at nodes with ≥ 3 connections
+    ctx.fillStyle = 'rgba(0,210,255,0.22)';
+    for (const n of nodes) {
+      if (n.conns.length >= 3) {
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // ── Render loop ─────────────────────────────────────────
+  function frame() {
+    // Partial fade (not clearRect) → previous frame lingers at 60 % opacity
+    // This creates natural motion blur / persistence on all moving elements
+    ctx.fillStyle = 'rgba(6,6,15,0.42)';
+    ctx.fillRect(0, 0, W, H);
+
+    drawTraces();
+
+    for (const p of pulses) { p.step(); p.draw(); }
+
+    // Soft cursor corona — pulses near the cursor feel "attracted"
+    if (mouse.on) {
+      const g = ctx.createRadialGradient(
+        mouse.x, mouse.y, 0,
+        mouse.x, mouse.y, 120
+      );
+      g.addColorStop(0, 'rgba(0,255,255,0.10)');
+      g.addColorStop(1, 'rgba(0,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(mouse.x, mouse.y, 120, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    raf = requestAnimationFrame(frame);
+  }
+
+  // ── Events ─────────────────────────────────────────────
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(buildGrid, 200);
+  });
+
+  window.addEventListener('mousemove', e => {
+    mouse.x  = e.clientX;
+    mouse.y  = e.clientY;
+    mouse.on = true;
+  });
+  window.addEventListener('mouseleave', () => { mouse.on = false; });
+
+  // Scroll velocity → temporary pulse speed boost
+  window.addEventListener('scroll', () => {
+    const sy = window.scrollY;
+    scrollVel = Math.min(Math.abs(sy - lastSY), 20);
+    lastSY    = sy;
+    clearTimeout(svTimer);
+    svTimer = setTimeout(() => { scrollVel = 0; }, 250);
+  }, { passive: true });
+
+  // Boot
+  buildGrid();
+})();
+</script>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="module">
