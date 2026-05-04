@@ -400,10 +400,22 @@
     .crf-info { flex: 1; min-width: 0; }
     .crf-name { font-size: .84rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .crf-size { font-size: .72rem; color: var(--muted); margin-top: 2px; }
-    .crf-dl { display: flex; align-items: center; gap: 5px; padding: 6px 12px; background: linear-gradient(135deg,#0ea5e9,#2563eb); color: #fff; border-radius: 7px; text-decoration: none; font-size: .77rem; font-weight: 700; flex-shrink: 0; white-space: nowrap; transition: opacity .15s, transform .1s; box-shadow: 0 2px 8px rgba(14,165,233,.2); }
-    .crf-dl:hover { opacity: .88; transform: translateY(-1px); }
-    .cloud-recv-all-btn { width: 100%; padding: 12px; border-radius: var(--radius-sm); border: none; background: linear-gradient(135deg,#0ea5e9,#2563eb); color: #fff; font-size: .875rem; font-weight: 700; cursor: pointer; transition: opacity .15s, transform .1s; box-shadow: 0 4px 16px rgba(14,165,233,.25); }
+    .crf-btns { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .crf-dl { display: flex; align-items: center; gap: 5px; padding: 6px 12px; background: linear-gradient(135deg,#0ea5e9,#2563eb); color: #fff; border-radius: 7px; text-decoration: none; font-size: .77rem; font-weight: 700; white-space: nowrap; transition: opacity .15s, transform .1s; box-shadow: 0 2px 8px rgba(14,165,233,.2); cursor: pointer; border: none; }
+    .crf-dl:hover:not(:disabled) { opacity: .88; transform: translateY(-1px); }
+    .crf-dl:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+    .crf-cancel-btn { width: 28px; height: 28px; border-radius: 6px; border: 1px solid rgba(239,68,68,.3); background: rgba(239,68,68,.07); color: var(--error); font-size: .85rem; font-weight: 700; cursor: pointer; transition: all .15s; display: flex; align-items: center; justify-content: center; flex-shrink: 0; line-height: 1; }
+    .crf-cancel-btn:hover { border-color: rgba(239,68,68,.6); background: rgba(239,68,68,.16); }
+    .crf-cancel-btn.restore { border-color: rgba(99,102,241,.35); background: rgba(99,102,241,.08); color: var(--accent-2); }
+    .crf-cancel-btn.restore:hover { border-color: rgba(99,102,241,.6); background: rgba(99,102,241,.15); }
+    .crf-item.cancelled { opacity: .5; }
+    .crf-item.cancelled .crf-dl { pointer-events: none; opacity: .35; }
+    .cloud-recv-actions { display: flex; gap: 8px; }
+    .cloud-recv-all-btn { flex: 1; padding: 12px; border-radius: var(--radius-sm); border: none; background: linear-gradient(135deg,#0ea5e9,#2563eb); color: #fff; font-size: .875rem; font-weight: 700; cursor: pointer; transition: opacity .15s, transform .1s; box-shadow: 0 4px 16px rgba(14,165,233,.25); }
     .cloud-recv-all-btn:hover { opacity: .88; transform: translateY(-1px); }
+    .cloud-recv-cancel-all-btn { padding: 12px 16px; border-radius: var(--radius-sm); border: 1px solid rgba(239,68,68,.3); background: rgba(239,68,68,.07); color: var(--error); font-size: .82rem; font-weight: 700; cursor: pointer; transition: all .15s; white-space: nowrap; }
+    .cloud-recv-cancel-all-btn:hover { border-color: rgba(239,68,68,.6); background: rgba(239,68,68,.14); }
+    .cloud-recv-cancel-all-btn.restore-all { border-color: rgba(99,102,241,.35); background: rgba(99,102,241,.08); color: var(--accent-2); }
     .cloud-expiry-info { margin-top: 12px; padding: 10px 13px; border-radius: var(--radius-sm); background: rgba(245,158,11,.06); border: 1px solid rgba(245,158,11,.18); font-size: .76rem; color: var(--warn); line-height: 1.45; }
 
     /* ── Link expired ── */
@@ -680,7 +692,10 @@
       <div id="cloud-recv-section" style="display:none">
         <div class="cloud-recv-badge">☁️ Cloud Transfer</div>
         <div id="cloud-recv-files" class="cloud-recv-files"></div>
-        <button class="cloud-recv-all-btn" id="cloud-recv-all-btn">☁️ Download All</button>
+        <div class="cloud-recv-actions">
+          <button class="cloud-recv-all-btn" id="cloud-recv-all-btn">☁️ Download All</button>
+          <button class="cloud-recv-cancel-all-btn" id="cloud-recv-cancel-all-btn">✕ Cancel All</button>
+        </div>
         <div class="cloud-expiry-info" id="cloud-expiry-info" style="display:none"></div>
       </div>
 
@@ -768,7 +783,7 @@
     </div>
     <div class="cloud-note-strip">
       <span class="cns-icon">☁️</span>
-      <p class="cns-text"><strong>Cloud mode eliminates this.</strong> Files upload in 50 MB chunks to Cloudflare R2 (free, no account for receivers, up to 20 GB+). The sender shares a link and can close their tab immediately. The receiver downloads any time before expiry — file is deleted automatically after first download. Requires <a href="beam-worker/DEPLOY.md" style="color:#38bdf8">deploying the Beam Worker</a>.</p>
+      <p class="cns-text"><strong>Cloud mode eliminates this.</strong> Files upload directly to cloud storage (free, no account needed, no size limit). The sender shares a link and can close their tab immediately. The receiver downloads any time before expiry — file is deleted automatically after first download.</p>
     </div>
   </section>
 
@@ -1198,10 +1213,11 @@ const cloudExpiryBadge   = document.getElementById('cloud-expiry-badge');
 const megaErrorBox       = document.getElementById('mega-error-box');
 const megaErrorBody      = document.getElementById('mega-error-body');
 const megaSwitchP2pBtn   = document.getElementById('mega-switch-p2p');
-const cloudRecvSection   = document.getElementById('cloud-recv-section');
-const cloudRecvFiles     = document.getElementById('cloud-recv-files');
-const cloudRecvAllBtn    = document.getElementById('cloud-recv-all-btn');
-const cloudExpiryInfo    = document.getElementById('cloud-expiry-info');
+const cloudRecvSection      = document.getElementById('cloud-recv-section');
+const cloudRecvFiles        = document.getElementById('cloud-recv-files');
+const cloudRecvAllBtn       = document.getElementById('cloud-recv-all-btn');
+const cloudRecvCancelAllBtn = document.getElementById('cloud-recv-cancel-all-btn');
+const cloudExpiryInfo       = document.getElementById('cloud-expiry-info');
 const linkExpiredScreen  = document.getElementById('link-expired-screen');
 
 // ── Mode selection ─────────────────────────────────────────────────────────────
@@ -1233,7 +1249,7 @@ window.selectMode = function(mode) {
     if (senderPeer && !activeSendConn) { senderPeer.destroy(); senderPeer = null; }
     updateExpiryRecommendation();
     if (!BEAM_WORKER_CONFIGURED) {
-      setStatus(sendStatus, '⚙️ Cloud mode needs the Beam Worker deployed. See beam-worker/DEPLOY.md.', 'warn');
+      setStatus(sendStatus, '⚙️ Cloud mode is not configured — set BEAM_WORKER_URL in the source.', 'warn');
     } else {
       setStatus(sendStatus, '', 'info');
     }
@@ -1278,7 +1294,7 @@ cloudUploadBtn.addEventListener('click', startCloudUpload);
 
 async function startCloudUpload() {
   if (!BEAM_WORKER_CONFIGURED) {
-    setStatus(sendStatus, '⚙️ Deploy the Beam Worker first. See beam-worker/DEPLOY.md.', 'warn');
+    setStatus(sendStatus, '⚙️ Cloud mode is not configured — set BEAM_WORKER_URL in the source.', 'warn');
     return;
   }
 
@@ -1510,11 +1526,18 @@ function handleCloudLinkParam(param) {
     const cloudFiles = data.files;
     const isV2 = data.v === 2;
 
-    // v2: Worker /download/{token} streams the file directly (R2 → Worker → browser).
+    // Track which files the user has cancelled (by token/link id)
+    const cancelledFiles = new Set();
+
+    // v2: Worker /download/{token} streams the file directly (Filebin → Worker → browser).
     //     The anchor click triggers a native browser download — no JS memory buffering,
     //     works for files of any size (1 byte to 20 GB+).
     // v1 (legacy): f.l is already a direct cloud URL.
-    function triggerDownload(f) {
+    function triggerDownload(f, manual = false) {
+      if (cancelledFiles.has(f.l)) {
+        if (manual) setStatus(recvStatus, `⊘ "${f.n}" is cancelled — click ↩ to restore it first.`, 'warn');
+        return;
+      }
       if (!isV2) {
         window.open(f.l, '_blank', 'noopener');
         return;
@@ -1534,26 +1557,58 @@ function handleCloudLinkParam(param) {
       a.click();
       document.body.removeChild(a);
 
-      setStatus(recvStatus, `⬇️ Downloading "${f.n}" — your browser will prompt you to save the file.`, 'info');
+      setStatus(recvStatus, `⬇️ Downloading "${f.n}" — your browser will prompt you to save. To stop, cancel in your browser's download bar.`, 'info');
 
-      // Re-enable after a delay (in case the user wants to see the error page)
       setTimeout(() => {
-        if (btn) { btn.textContent = '✓ Started'; }
+        if (btn) { btn.textContent = '✓ Started'; btn.disabled = false; }
       }, 2500);
+    }
+
+    function updateCancelAllBtn() {
+      const allCancelled = cloudFiles.length > 0 && cloudFiles.every(f => cancelledFiles.has(f.l));
+      cloudRecvCancelAllBtn.textContent = allCancelled ? '↩ Restore All' : '✕ Cancel All';
+      cloudRecvCancelAllBtn.classList.toggle('restore-all', allCancelled);
     }
 
     cloudFiles.forEach(f => {
       const item = document.createElement('div');
       item.className = 'crf-item';
+      item.setAttribute('data-token', f.l);
       item.innerHTML = `
         <span class="crf-icon">${fileIcon(f.n, f.t)}</span>
         <div class="crf-info">
           <div class="crf-name">${f.n}</div>
           <div class="crf-size">${formatBytes(f.s)}</div>
         </div>
-        <button class="crf-dl" id="dl-btn-${f.l}">☁️ Download</button>
+        <div class="crf-btns">
+          <button class="crf-dl" id="dl-btn-${f.l}">☁️ Download</button>
+          <button class="crf-cancel-btn" id="cancel-btn-${f.l}" title="Cancel this file">✕</button>
+        </div>
       `;
-      item.querySelector('.crf-dl').addEventListener('click', () => triggerDownload(f));
+
+      item.querySelector('.crf-dl').addEventListener('click', () => triggerDownload(f, true));
+
+      item.querySelector('.crf-cancel-btn').addEventListener('click', () => {
+        const cancelBtn = document.getElementById(`cancel-btn-${f.l}`);
+        if (cancelledFiles.has(f.l)) {
+          // Restore
+          cancelledFiles.delete(f.l);
+          item.classList.remove('cancelled');
+          cancelBtn.textContent = '✕';
+          cancelBtn.title = 'Cancel this file';
+          cancelBtn.classList.remove('restore');
+        } else {
+          // Cancel
+          cancelledFiles.add(f.l);
+          item.classList.add('cancelled');
+          cancelBtn.textContent = '↩';
+          cancelBtn.title = 'Restore this file';
+          cancelBtn.classList.add('restore');
+          setStatus(recvStatus, `⊘ "${f.n}" cancelled. Click ↩ to restore.`, 'warn');
+        }
+        updateCancelAllBtn();
+      });
+
       cloudRecvFiles.appendChild(item);
     });
 
@@ -1564,7 +1619,33 @@ function handleCloudLinkParam(param) {
     cloudExpiryInfo.style.display = 'block';
 
     cloudRecvAllBtn.addEventListener('click', () => {
-      cloudFiles.forEach((f, i) => setTimeout(() => triggerDownload(f), i * 800));
+      const pending = cloudFiles.filter(f => !cancelledFiles.has(f.l));
+      if (pending.length === 0) {
+        setStatus(recvStatus, '⊘ All files are cancelled. Click ↩ on a file to restore it.', 'warn');
+        return;
+      }
+      pending.forEach((f, i) => setTimeout(() => triggerDownload(f), i * 800));
+    });
+
+    cloudRecvCancelAllBtn.addEventListener('click', () => {
+      const allCancelled = cloudFiles.every(f => cancelledFiles.has(f.l));
+      cloudFiles.forEach(f => {
+        const item    = document.querySelector(`.crf-item[data-token="${f.l}"]`);
+        const cancelBtn = document.getElementById(`cancel-btn-${f.l}`);
+        if (allCancelled) {
+          // Restore all
+          cancelledFiles.delete(f.l);
+          item?.classList.remove('cancelled');
+          if (cancelBtn) { cancelBtn.textContent = '✕'; cancelBtn.title = 'Cancel this file'; cancelBtn.classList.remove('restore'); }
+        } else {
+          // Cancel all
+          cancelledFiles.add(f.l);
+          item?.classList.add('cancelled');
+          if (cancelBtn) { cancelBtn.textContent = '↩'; cancelBtn.title = 'Restore this file'; cancelBtn.classList.add('restore'); }
+        }
+      });
+      updateCancelAllBtn();
+      if (!allCancelled) setStatus(recvStatus, '⊘ All downloads cancelled. Click ↩ Restore All to undo.', 'warn');
     });
 
     cloudRecvSection.style.display = 'block';
