@@ -1,9 +1,9 @@
 # Deploying Beam Worker to Cloudflare
 
 This Worker handles Cloud Transfer mode for Beam:
-- **No size limit, no credit card** — files upload directly from the browser to **Gofile.io** (free, anonymous, unlimited size)
-- Browser uploads file to Gofile via XHR → Worker registers the fileId in **Cloudflare KV** and returns a single-use token
-- Receiver hits `/download/:token` → Worker fetches the Gofile direct link → streams file to browser → deletes from Gofile
+- **No size limit, no credit card** — files upload directly from the browser to **Filebin.net** (free, anonymous, no size limit)
+- Browser uploads file to Filebin via XHR → Worker registers the binId in **Cloudflare KV** and returns a single-use token
+- Receiver hits `/download/:token` → Worker fetches the file from Filebin → streams it to the browser → deletes from Filebin
 - Single-use download tokens stored in **Cloudflare KV**, expire automatically
 
 ---
@@ -113,16 +113,16 @@ Use `wrangler dev --test-scheduled` and visit `/__scheduled?cron=*+*+*+*+*` to t
 
 ## Free tier limits
 
-| Resource           | Free allowance / month      |
-|--------------------|-----------------------------|
-| Gofile storage     | Unlimited (files auto-deleted after download) |
-| Gofile file size   | No limit                    |
-| Gofile bandwidth   | Free                        |
-| Worker requests    | 100,000 / day               |
-| KV reads           | 100,000 / day               |
-| KV writes          | 1,000 / day                 |
+| Resource           | Free allowance / month       |
+|--------------------|------------------------------|
+| Filebin storage    | No limit (files auto-deleted after download) |
+| Filebin file size  | No documented limit          |
+| Filebin retention  | 6 days (reset on download)   |
+| Worker requests    | 100,000 / day                |
+| KV reads           | 100,000 / day                |
+| KV writes          | 1,000 / day                  |
 
-Files are deleted from Gofile immediately after the first download (or when the token expires via cron), so storage is only used briefly per transfer. No credit card is ever required.
+Files are deleted from Filebin immediately after the first download (or when the token expires via cron). No credit card is ever required.
 
 ---
 
@@ -133,6 +133,6 @@ Files are deleted from Gofile immediately after the first download (or when the 
 | `wrangler: command not found` | Run `npm install` first, then use `npx wrangler` |
 | CORS errors in browser | Check `BEAM_ALLOWED_ORIGIN` secret matches your Beam page origin exactly |
 | KV write errors | Confirm the `id` in `wrangler.toml` matches the namespace you created |
-| Upload fails | Check browser console for XHR errors; Gofile may be temporarily down |
-| Download returns 502 | Gofile link may have expired; the file may need to be re-uploaded |
+| Upload fails | Check browser console — Filebin may be temporarily down |
+| Download returns 502 | File may have been deleted or expired on Filebin |
 | Cron not firing | Crons only run on deployed Workers, not `wrangler dev` |

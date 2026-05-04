@@ -1,19 +1,19 @@
 /**
  * Beam Cloud Worker — Cloudflare Workers
  *
- * Storage backend: Gofile.io (free, anonymous, unlimited size, no credit card).
- * The browser uploads directly to Gofile — the Worker never touches file bytes.
- * Worker only stores a single-use download token in KV.
+ * Storage backend: Filebin.net (free, anonymous, no size limit, no credit card).
+ * The browser uploads directly to Filebin — the Worker never touches file bytes.
+ * Worker stores a single-use download token in KV.
  *
  * Routes:
- *   POST /register          browser uploads to Gofile, then registers the fileId +
- *                           guestToken here. Returns { ok, token, expiresAt }.
- *   GET  /download/:token   validates token, fetches Gofile directLink, streams
- *                           file to client, deletes from Gofile + KV.
+ *   POST /register          browser uploads to Filebin, then registers binId +
+ *                           filename here. Returns { ok, token, expiresAt }.
+ *   GET  /download/:token   validates token, fetches file from Filebin, streams
+ *                           to client, deletes from Filebin + KV.
  *   GET  /health            liveness check.
  *
  * Scheduled (cron "* * * * *"):
- *   Scans KV for expired entries, deletes Gofile files, purges KV.
+ *   Scans KV for expired entries, deletes Filebin files, purges KV.
  *
  * Bindings:
  *   BEAM_EXPIRY          KV namespace  (no R2, no credit card needed)
@@ -58,43 +58,27 @@ function generateToken() {
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-// ─── Gofile helpers ───────────────────────────────────────────────────────────
+// ─── Filebin helpers ──────────────────────────────────────────────────────────
 
 /**
- * Delete a file from Gofile using the guestToken returned at upload time.
+ * Delete a specific file from Filebin.
  * Fire-and-forget — errors are logged but not fatal.
  */
-async function gofileDelete(fileId, guestToken) {
-  if (!fileId || !guestToken) return;
+async function filebinDelete(binId, filename) {
+  if (!binId || !filename) return;
   try {
-    await fetch(`https://api.gofile.io/contents/${fileId}`, {
-      method:  'DELETE',
-      headers: { Authorization: `Bearer ${guestToken}` },
-    });
+    await fetch(
+      `https://filebin.net/${encodeURIComponent(binId)}/${encodeURIComponent(filename)}`,
+      { method: 'DELETE' },
+    );
   } catch (err) {
-    console.error('[beam-worker] Gofile delete error:', err.message);
+    console.error('[beam-worker] filebin delete error:', err.message);
   }
 }
 
-/**
- * Get the direct download URL for a Gofile file.
- * Uses the guestToken (obtained at upload) for authenticated access.
- */
-async function gofileDirectLink(fileId, guestToken) {
-  const res = await fetch(
-    `https://api.gofile.io/contents/${fileId}?token=${guestToken}`,
-  );
-  if (!res.ok) throw new Error(`Gofile content API HTTP ${res.status}`);
-  const data = await res.json();
-  if (data.status !== 'ok') throw new Error(`Gofile API error: ${data.status}`);
-  const link = data.data?.directLink || data.data?.link;
-  if (!link) throw new Error('Gofile returned no download URL');
-  return link;
-}
-
 // ─── POST /register ───────────────────────────────────────────────────────────
-// Called after the browser has uploaded the file to Gofile directly.
-// Body: { fileId, guestToken, filename, size, mimeType?, expiryMinutes? }
+// Called after the browser has uploaded the file to Filebin directly.
+// Body: { binId, filename, size, mimeType?, expiryMinutes? }
 // Returns: { ok, token, expiresAt, expiryMinutes }
 
 async function handleRegister(request, env, origin) {
@@ -103,10 +87,9 @@ async function handleRegister(request, env, origin) {
     return json({ error: 'Invalid JSON body.' }, 400, origin);
   }
 
-  const { fileId, guestToken, filename, size, mimeType, expiryMinutes: raw } = body;
+  const { binId, filename, size, mimeType, expiryMinutes: raw } = body;
 
-  if (!fileId   || typeof fileId   !== 'string') return json({ error: 'fileId required.'   }, 400, origin);
-  if (!guestToken || typeof guestToken !== 'string') return json({ error: 'guestToken required.' }, 400, origin);
+  if (!binId    || typeof binId    !== 'string') return json({ error: 'binId required.'    }, 400, origin);
   if (!filename || typeof filename !== 'string') return json({ error: 'filename required.' }, 400, origin);
 
   const expiryMinutes = Math.min(Math.max(parseInt(raw, 10) || 30, 5), 1440);
@@ -115,7 +98,13 @@ async function handleRegister(request, env, origin) {
 
   await env.BEAM_EXPIRY.put(
     `dl:${token}`,
-    JSON.stringify({ fileId, guestToken, filename, size: size || 0, mimeType: mimeType || '', expiresAt }),
+    JSON.stringify({
+      binId,
+      filename,
+      size:     size     || 0,
+      mimeType: mimeType || 'application/octet-stream',
+      expiresAt,
+    }),
     { expirationTtl: expiryMinutes * 60 },
   );
 
@@ -123,7 +112,7 @@ async function handleRegister(request, env, origin) {
 }
 
 // ─── GET /download/:token ─────────────────────────────────────────────────────
-// Validates token, fetches file from Gofile, streams to browser, then cleans up.
+// Validates token, fetches file from Filebin, streams to browser, then cleans up.
 
 async function handleDownload(token, env, origin, ctx) {
   if (!token || token.length < 10) {
@@ -146,7 +135,7 @@ async function handleDownload(token, env, origin, ctx) {
 
   if (Date.now() > meta.expiresAt) {
     await env.BEAM_EXPIRY.delete(`dl:${token}`);
-    ctx.waitUntil(gofileDelete(meta.fileId, meta.guestToken));
+    ctx.waitUntil(filebinDelete(meta.binId, meta.filename));
     return htmlError(
       '⏰ Link expired',
       'This link has passed its expiry time. Ask the sender to re-upload.',
@@ -154,12 +143,28 @@ async function handleDownload(token, env, origin, ctx) {
     );
   }
 
-  // Get the Gofile direct download URL
-  let directLink;
+  // Delete KV immediately — single-use enforced from here
+  await env.BEAM_EXPIRY.delete(`dl:${token}`);
+
+  // Fetch from Filebin — follows the 302 redirect to S3 automatically.
+  // Explicit non-browser headers prevent filebin from serving its HTML warning page.
+  let fbRes;
   try {
-    directLink = await gofileDirectLink(meta.fileId, meta.guestToken);
+    fbRes = await fetch(
+      `https://filebin.net/${encodeURIComponent(meta.binId)}/${encodeURIComponent(meta.filename)}`,
+      {
+        redirect: 'follow',
+        headers: {
+          // Filebin serves its HTML warning page to unknown User-Agents.
+          // Using a recognised downloader UA gets a direct 302 → S3 instead.
+          'User-Agent': 'Wget/1.21',
+          'Accept':     '*/*',
+        },
+      },
+    );
+    if (!fbRes.ok) throw new Error(`Filebin HTTP ${fbRes.status}`);
   } catch (err) {
-    console.error('[beam-worker] Gofile link error:', err.message);
+    console.error('[beam-worker] filebin fetch error:', err.message);
     return htmlError(
       'File unavailable',
       'The file could not be retrieved from cloud storage. It may have expired.',
@@ -167,24 +172,11 @@ async function handleDownload(token, env, origin, ctx) {
     );
   }
 
-  // Delete KV immediately — single-use enforced from here
-  await env.BEAM_EXPIRY.delete(`dl:${token}`);
-
-  // Fetch from Gofile
-  let goRes;
-  try {
-    goRes = await fetch(directLink);
-    if (!goRes.ok) throw new Error(`Gofile HTTP ${goRes.status}`);
-  } catch (err) {
-    console.error('[beam-worker] Gofile fetch error:', err.message);
-    return htmlError('Download failed', 'Could not fetch file from cloud storage.', 502, origin);
-  }
-
-  // Pipe Gofile → client; delete file from Gofile after stream completes
+  // Pipe Filebin → client; delete file from Filebin after stream completes
   const { readable, writable } = new TransformStream();
-  const pipeAndDelete = goRes.body
+  const pipeAndDelete = fbRes.body
     .pipeTo(writable)
-    .then(()  => gofileDelete(meta.fileId, meta.guestToken))
+    .then(()  => filebinDelete(meta.binId, meta.filename))
     .catch(err => console.error('[beam-worker] stream error:', err.message));
   ctx.waitUntil(pipeAndDelete);
 
@@ -221,7 +213,7 @@ async function handleScheduled(env) {
       if (now > meta.expiresAt) {
         console.log(`[beam-worker] cron: expiring ${key.name} (${meta.filename})`);
         await Promise.allSettled([
-          gofileDelete(meta.fileId, meta.guestToken),
+          filebinDelete(meta.binId, meta.filename),
           env.BEAM_EXPIRY.delete(key.name),
         ]);
       }

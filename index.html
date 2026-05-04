@@ -1344,72 +1344,65 @@ async function startCloudUpload() {
   showCloudLink(cloudUrl, expiresAt);
 }
 
-// Direct upload to Gofile.io (free, no account, no credit card, unlimited size).
-// Browser uploads the file straight to Gofile via XHR (real progress events),
-// then registers the Gofile fileId with the Worker so it can issue a download token.
+// Direct upload to Filebin.net (free, anonymous, no size limit, no credit card).
+// Browser uploads the file straight to Filebin via XHR (real progress events),
+// then registers the binId with the Worker so it can issue a download token.
 // Works for files from 1 byte to 20 GB+ — no chunking needed.
+//
+// CORS trick: sending a Blob with no type means no Content-Type header is set,
+// which keeps the request "simple" (no CORS preflight required).
+
+function generateBinId() {
+  const arr = new Uint8Array(18);
+  crypto.getRandomValues(arr);
+  return btoa(String.fromCharCode(...arr))
+    .replace(/\+/g, '-').replace(/\//g, '-').replace(/=/g, '').replace(/_/g, '-')
+    .slice(0, 24).toLowerCase();
+}
 
 async function uploadFileToWorker(file, expiryMinutes, onProgress) {
+  const binId       = generateBinId();
+  const encodedName = encodeURIComponent(file.name);
 
-  // ── Step 1: Find the best Gofile server ────────────────────────────────────
-  onProgress(2, 'Connecting…');
-  let server;
-  try {
-    const srvRes = await fetch('https://api.gofile.io/servers');
-    if (!srvRes.ok) throw new Error(`HTTP ${srvRes.status}`);
-    const srvData = await srvRes.json();
-    server = srvData?.data?.servers?.[0]?.name;
-    if (!server) throw new Error('No server in response');
-  } catch (err) {
-    throw new Error(`Could not reach Gofile servers: ${err.message}`);
-  }
-
-  // ── Step 2: XHR upload to Gofile (real progress events) ────────────────────
+  // ── Step 1: XHR upload to Filebin (real progress events) ───────────────────
+  // Send as new Blob([file]) — this has no .type, so XHR omits Content-Type.
+  // Omitting Content-Type makes this a CORS "simple" request → no preflight.
   onProgress(5, 'Starting upload…');
-  const { fileId, guestToken } = await new Promise((resolve, reject) => {
+
+  await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `https://${server}.gofile.io/contents/uploadFile`);
+    xhr.open('POST', `https://filebin.net/${binId}/${encodedName}`);
 
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
-        // Map 0→100% upload progress to 5→93% overall progress
+        // Map 0→100% upload progress to 5→93% overall
         const pct = Math.round((e.loaded / e.total) * 88) + 5;
         onProgress(pct, `${formatBytes(e.loaded)} of ${formatBytes(e.total)}`);
       }
     };
 
     xhr.onload = () => {
-      try {
-        const data = JSON.parse(xhr.responseText);
-        if (data.status !== 'ok') {
-          reject(new Error(data.message || `Gofile upload error: ${data.status}`));
-          return;
-        }
-        resolve({
-          fileId:     data.data.fileId,
-          guestToken: data.data.guestToken,
-        });
-      } catch (e) {
-        reject(new Error('Invalid response from Gofile'));
+      if (xhr.status === 201 || xhr.status === 200) {
+        resolve();
+      } else {
+        reject(new Error(`Upload failed (HTTP ${xhr.status})`));
       }
     };
 
-    xhr.onerror  = () => reject(new Error('Network error during upload.'));
+    xhr.onerror   = () => reject(new Error('Network error during upload.'));
     xhr.ontimeout = () => reject(new Error('Upload timed out.'));
 
-    const fd = new FormData();
-    fd.append('file', file, file.name);
-    xhr.send(fd);
+    // Wrap in untyped Blob so no Content-Type header is sent → CORS-safe
+    xhr.send(new Blob([file]));
   });
 
-  // ── Step 3: Register with Worker — get single-use download token ────────────
+  // ── Step 2: Register with Worker — get single-use download token ────────────
   onProgress(95, 'Securing link…');
   const regRes = await fetch(`${BEAM_WORKER_URL}/register`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({
-      fileId,
-      guestToken,
+      binId,
       filename:      file.name,
       size:          file.size,
       mimeType:      file.type || 'application/octet-stream',
