@@ -321,6 +321,22 @@
     .dependency-strip .ds-text { font-size: .76rem; color: var(--warn); line-height: 1.5; }
     .dependency-strip .ds-text strong { color: #fbbf24; }
 
+    /* ── How it works mode toggle ── */
+    .hiw-toggle { display: flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 4px; gap: 4px; width: fit-content; margin: 0 auto 22px; }
+    .hiw-tab { padding: 7px 22px; border-radius: 7px; border: none; background: transparent; color: var(--muted); font-size: .8rem; font-weight: 700; cursor: pointer; transition: all .18s; letter-spacing: .01em; }
+    .hiw-tab:hover { color: var(--muted-2); }
+    .hiw-tab[data-mode="p2p"].active { background: rgba(99,102,241,.12); color: var(--accent-2); }
+    .hiw-tab[data-mode="cloud"].active { background: rgba(14,165,233,.1); color: #38bdf8; }
+    .hiw-mode { display: none; }
+    .hiw-mode.active { display: block; }
+    /* Cloud send column overrides */
+    .how-col.cloud-send-col::before { background: linear-gradient(90deg,transparent,#0ea5e9,transparent); opacity: .7; }
+    .cloud-send-col .how-col-title { color: #38bdf8; }
+    .cloud-send-col .step-num { background: rgba(14,165,233,.12); color: #38bdf8; border-color: rgba(14,165,233,.25); }
+    .cloud-send-col .step-connector { background: #0ea5e9; }
+    /* Cloud privacy strip */
+    .cloud-privacy-strip { margin-top: 14px; padding: 14px 18px; background: rgba(14,165,233,.05); border: 1px solid rgba(14,165,233,.15); border-radius: var(--radius-sm); display: flex; align-items: center; gap: 12px; }
+
     footer { margin-top: 36px; color: var(--muted); font-size: .75rem; text-align: center; line-height: 1.7; }
     footer a { color: var(--muted); text-decoration: underline; opacity: .7; }
     footer a:hover { opacity: 1; }
@@ -717,74 +733,145 @@
       <h2 class="how-title">How it works</h2>
       <p class="how-sub">Transfer in seconds — no accounts, no installs, no waiting</p>
     </div>
-    <div class="how-grid">
-      <div class="how-col send-col">
-        <div class="how-col-title"><span>📤</span> Send Files</div>
-        <div class="how-step">
-          <span class="step-num">1</span>
-          <div class="step-body">
-            <div class="step-title">Drop or pick files</div>
-            <div class="step-desc">Drop one or multiple files — images, videos, ZIPs, anything. Add more any time before sharing the link.</div>
+
+    <!-- Mode toggle -->
+    <div class="hiw-toggle">
+      <button class="hiw-tab active" data-mode="p2p">⚡ P2P</button>
+      <button class="hiw-tab" data-mode="cloud">☁️ Cloud</button>
+    </div>
+
+    <!-- P2P steps -->
+    <div class="hiw-mode active" id="hiw-p2p">
+      <div class="how-grid">
+        <div class="how-col send-col">
+          <div class="how-col-title"><span>📤</span> Send Files</div>
+          <div class="how-step">
+            <span class="step-num">1</span>
+            <div class="step-body">
+              <div class="step-title">Drop or pick files</div>
+              <div class="step-desc">Drop one or multiple files — images, videos, ZIPs, anything. Add more any time before sharing the code.</div>
+            </div>
+          </div>
+          <div class="step-connector"></div>
+          <div class="how-step">
+            <span class="step-num">2</span>
+            <div class="step-body">
+              <div class="step-title">Share the code or link</div>
+              <div class="step-desc">Copy the 6-char code or use WhatsApp, Telegram, Gmail etc. The receiver sees a file preview before anything transfers.</div>
+            </div>
+          </div>
+          <div class="step-connector"></div>
+          <div class="how-step">
+            <span class="step-num">3</span>
+            <div class="step-body">
+              <div class="step-title">⚠️ Stay until they're done</div>
+              <div class="step-desc">Your browser <strong style="color:var(--warn)">is</strong> the server. Keep this tab open until you see "✅ All files received." Closing early cuts the receiver's download immediately.</div>
+            </div>
           </div>
         </div>
-        <div class="step-connector"></div>
-        <div class="how-step">
-          <span class="step-num">2</span>
-          <div class="step-body">
-            <div class="step-title">Share the code or link</div>
-            <div class="step-desc">Copy the 6-char code or use WhatsApp, Telegram, Gmail etc. The receiver sees a file preview before anything transfers.</div>
+        <div class="how-col recv-col">
+          <div class="how-col-title"><span>📥</span> Receive Files</div>
+          <div class="how-step">
+            <span class="step-num">1</span>
+            <div class="step-body">
+              <div class="step-title">Open the link or enter code</div>
+              <div class="step-desc">Click the shared link (auto-fills the code) or switch to Receive and type the 6-char code. <strong style="color:var(--warn)">The sender must have their tab open</strong> when you connect.</div>
+            </div>
           </div>
-        </div>
-        <div class="step-connector"></div>
-        <div class="how-step">
-          <span class="step-num">3</span>
-          <div class="step-body">
-            <div class="step-title">⚠️ Stay until they're done</div>
-            <div class="step-desc">Your browser <strong style="color:var(--warn)">is</strong> the server. Keep this tab open until you see "✅ All files received." Closing early cuts the receiver's download immediately.</div>
+          <div class="step-connector"></div>
+          <div class="how-step">
+            <span class="step-num">2</span>
+            <div class="step-body">
+              <div class="step-title">Review & choose files</div>
+              <div class="step-desc">You'll see a preview of all files before any data transfers. Pick what you want, then click Download All or Download Selected.</div>
+            </div>
+          </div>
+          <div class="step-connector"></div>
+          <div class="how-step">
+            <span class="step-num">3</span>
+            <div class="step-body">
+              <div class="step-title">Save to your device</div>
+              <div class="step-desc">Files stream in and collect below. Download them individually or use Save All. You'll get an alert if the sender disconnects mid-transfer.</div>
+            </div>
           </div>
         </div>
       </div>
-      <div class="how-col recv-col">
-        <div class="how-col-title"><span>📥</span> Receive Files</div>
-        <div class="how-step">
-          <span class="step-num">1</span>
-          <div class="step-body">
-            <div class="step-title">Open the link or enter code</div>
-            <div class="step-desc">Click the shared link (auto-fills the code) or switch to Receive and type the 6-char code. <strong style="color:var(--warn)">The sender must have their tab open</strong> when you connect.</div>
+      <div class="privacy-strip">
+        <span class="privacy-icon">🔒</span>
+        <p class="privacy-text">
+          <strong>Your files never leave your browser.</strong> Beam uses WebRTC — a direct encrypted channel between browsers. The signaling server only exchanges connection info, then steps away entirely.
+        </p>
+      </div>
+      <div class="dependency-strip">
+        <span class="ds-icon">⚡</span>
+        <p class="ds-text"><strong>P2P mode: both sides must be online at the same time.</strong> The sender's open browser tab <em>is</em> the source. If they close it, the transfer stops and you'll see a disconnection alert.</p>
+      </div>
+    </div>
+
+    <!-- Cloud steps -->
+    <div class="hiw-mode" id="hiw-cloud">
+      <div class="how-grid">
+        <div class="how-col send-col cloud-send-col">
+          <div class="how-col-title"><span>📤</span> Send Files</div>
+          <div class="how-step">
+            <span class="step-num">1</span>
+            <div class="step-body">
+              <div class="step-title">Drop your file & set expiry</div>
+              <div class="step-desc">Pick a file (or multiple), then choose how long the link stays valid — anywhere from 5 minutes to 24 hours.</div>
+            </div>
+          </div>
+          <div class="step-connector"></div>
+          <div class="how-step">
+            <span class="step-num">2</span>
+            <div class="step-body">
+              <div class="step-title">Upload & share the link</div>
+              <div class="step-desc">Click Upload to Cloud. Once done, share the link via WhatsApp, email, QR code — or just copy it. No code to memorise.</div>
+            </div>
+          </div>
+          <div class="step-connector"></div>
+          <div class="how-step">
+            <span class="step-num">3</span>
+            <div class="step-body">
+              <div class="step-title">✅ Close your tab</div>
+              <div class="step-desc">You're done. The file is already in cloud storage. The receiver downloads any time before the link expires — your tab doesn't need to stay open.</div>
+            </div>
           </div>
         </div>
-        <div class="step-connector"></div>
-        <div class="how-step">
-          <span class="step-num">2</span>
-          <div class="step-body">
-            <div class="step-title">Review & choose files</div>
-            <div class="step-desc">You'll see a preview of all files before any data transfers. Pick what you want, then click Download All or Download Selected.</div>
+        <div class="how-col recv-col">
+          <div class="how-col-title"><span>📥</span> Receive Files</div>
+          <div class="how-step">
+            <span class="step-num">1</span>
+            <div class="step-body">
+              <div class="step-title">Open the link</div>
+              <div class="step-desc">No code, no app, no account needed. Just open the link the sender shared — works in any browser on any device.</div>
+            </div>
           </div>
-        </div>
-        <div class="step-connector"></div>
-        <div class="how-step">
-          <span class="step-num">3</span>
-          <div class="step-body">
-            <div class="step-title">Save to your device</div>
-            <div class="step-desc">Files stream in and collect below. Download them individually or use Save All. You'll get an alert if the sender disconnects mid-transfer.</div>
+          <div class="step-connector"></div>
+          <div class="how-step">
+            <span class="step-num">2</span>
+            <div class="step-body">
+              <div class="step-title">Download your file</div>
+              <div class="step-desc">Click ☁️ Download — the file streams directly from cloud storage to your device. No waiting for the sender to be online.</div>
+            </div>
+          </div>
+          <div class="step-connector"></div>
+          <div class="how-step">
+            <span class="step-num">3</span>
+            <div class="step-body">
+              <div class="step-title">🔐 Single-use & auto-deleted</div>
+              <div class="step-desc">The link works once. The file is deleted from cloud storage immediately after download — or automatically when the expiry time passes.</div>
+            </div>
           </div>
         </div>
       </div>
+      <div class="cloud-privacy-strip">
+        <span class="privacy-icon">🔐</span>
+        <p class="privacy-text">
+          <strong style="color:#38bdf8">Files are deleted from cloud storage immediately after download.</strong> The link is single-use — even if someone intercepts it after the first download, the file is already gone.
+        </p>
+      </div>
     </div>
-    <div class="privacy-strip">
-      <span class="privacy-icon">🔒</span>
-      <p class="privacy-text">
-        <strong>Your files never leave your browser.</strong> Beam uses WebRTC — a direct encrypted channel between browsers. The signaling server only exchanges connection info, then steps away entirely.
-      </p>
-    </div>
-    <div class="dependency-strip">
-      <span class="ds-icon">⚡</span>
-      <p class="ds-text"><strong>P2P mode: both sides must be online at the same time.</strong> The sender's open browser tab <em>is</em> the source. If they close it, the transfer stops and you'll see a disconnection alert.</p>
-    </div>
-    <div class="cloud-note-strip">
-      <span class="cns-icon">☁️</span>
-      <p class="cns-text"><strong>Cloud mode eliminates this.</strong> Files upload directly to cloud storage (free, no account needed, no size limit). The sender shares a link and can close their tab immediately. The receiver downloads any time before expiry — file is deleted automatically after first download.</p>
-    </div>
+
   </section>
 
   <footer>
@@ -2096,6 +2183,15 @@ function startReceiver() {
     });
   });
 }
+
+// ── How it works mode toggle ──────────────────────────────────────────────────
+document.querySelectorAll('.hiw-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const mode = tab.dataset.mode;
+    document.querySelectorAll('.hiw-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
+    document.querySelectorAll('.hiw-mode').forEach(m => m.classList.toggle('active', m.id === `hiw-${mode}`));
+  });
+});
 
 </script>
 </body>
