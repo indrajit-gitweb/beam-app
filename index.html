@@ -390,12 +390,72 @@
     .app-popup-close:hover { color: var(--text); }
 
     /* ── How it works ── */
-    .how-section { width: 100%; margin-top: 48px; }
-    /* Switching P2P ↔ Cloud fades the new pane in */
-    .hiw-mode.active { animation: fade-up 0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
-    /* Scroll reveal — base state */
+    .how-section { width: 100%; margin-top: 48px; position: relative; }
+    /* Scroll reveal — base state (footer etc.) */
     .reveal { opacity: 0; transform: translateY(28px); transition: opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1), transform 0.65s cubic-bezier(0.22, 1, 0.36, 1); }
     .reveal.is-visible { opacity: 1; transform: none; }
+
+    /* ── Scan Line: sweeps top → bottom when How It Works enters viewport ── */
+    .how-section::after {
+      content: '';
+      position: absolute; left: 0; right: 0;
+      top: -2px; height: 3px;
+      background: linear-gradient(90deg, transparent 0%, #22d3ee 20%, #00ffff 50%, #22d3ee 80%, transparent 100%);
+      box-shadow: 0 0 18px 7px rgba(0,255,255,0.5);
+      opacity: 0; pointer-events: none; z-index: 30;
+    }
+    .how-section.scan-active::after { animation: scan-beam 1.3s cubic-bezier(0.4, 0, 0.3, 1) forwards; }
+    @keyframes scan-beam {
+      0%  { top: -2px; opacity: 1; }
+      88% { top: 100%; opacity: 1; }
+      100%{ top: 100%; opacity: 0; }
+    }
+
+    /* ── Bounce-in keyframes ── */
+    @keyframes bounce-from-left {
+      0%   { transform: translateX(-110px); opacity: 0; }
+      55%  { transform: translateX(14px);   opacity: 1; }
+      72%  { transform: translateX(-7px);   opacity: 1; }
+      86%  { transform: translateX(4px);    opacity: 1; }
+      94%  { transform: translateX(-1px);   opacity: 1; }
+      100% { transform: translateX(0);      opacity: 1; }
+    }
+    @keyframes bounce-from-right {
+      0%   { transform: translateX(110px);  opacity: 0; }
+      55%  { transform: translateX(-14px);  opacity: 1; }
+      72%  { transform: translateX(7px);    opacity: 1; }
+      86%  { transform: translateX(-4px);   opacity: 1; }
+      94%  { transform: translateX(1px);    opacity: 1; }
+      100% { transform: translateX(0);      opacity: 1; }
+    }
+    @keyframes bounce-from-bottom {
+      0%   { transform: translateY(50px);  opacity: 0; }
+      55%  { transform: translateY(-10px); opacity: 1; }
+      75%  { transform: translateY(5px);   opacity: 1; }
+      88%  { transform: translateY(-2px);  opacity: 1; }
+      100% { transform: translateY(0);     opacity: 1; }
+    }
+
+    /* All section children start invisible; scan-active triggers each in turn */
+    .how-section .how-header,
+    .how-section .hiw-toggle,
+    .how-section .how-grid .how-col,
+    .how-section .privacy-strip,
+    .how-section .dependency-strip,
+    .how-section .cloud-privacy-strip { opacity: 0; }
+
+    .how-section.scan-active .how-header   { animation: bounce-from-bottom 0.55s 0.15s cubic-bezier(0.34,1.56,0.64,1) both; }
+    .how-section.scan-active .hiw-toggle   { animation: bounce-from-bottom 0.50s 0.45s cubic-bezier(0.34,1.56,0.64,1) both; }
+    /* Left card from left, right card from right — with bounce overshoot */
+    .how-section.scan-active .how-grid .how-col:nth-child(1) { animation: bounce-from-left  0.75s 0.78s cubic-bezier(0.34,1.56,0.64,1) both; }
+    .how-section.scan-active .how-grid .how-col:nth-child(2) { animation: bounce-from-right 0.75s 0.93s cubic-bezier(0.34,1.56,0.64,1) both; }
+    /* Strips below cards appear vertically, one after another */
+    .how-section.scan-active .privacy-strip    { animation: bounce-from-bottom 0.60s 1.18s cubic-bezier(0.34,1.56,0.64,1) both; }
+    .how-section.scan-active .dependency-strip { animation: bounce-from-bottom 0.60s 1.33s cubic-bezier(0.34,1.56,0.64,1) both; }
+    /* Cloud tab: columns + strip bounce fresh each time cloud tab is activated */
+    #hiw-cloud.active .how-col:nth-child(1)   { animation: bounce-from-left   0.65s 0.05s cubic-bezier(0.34,1.56,0.64,1) both; }
+    #hiw-cloud.active .how-col:nth-child(2)   { animation: bounce-from-right  0.65s 0.15s cubic-bezier(0.34,1.56,0.64,1) both; }
+    #hiw-cloud.active .cloud-privacy-strip    { animation: bounce-from-bottom  0.60s 0.32s cubic-bezier(0.34,1.56,0.64,1) both; }
     .how-header { text-align: center; margin-bottom: 28px; }
     .how-title { font-size: 1.15rem; font-weight: 800; letter-spacing: -.02em; color: var(--text); margin-bottom: 6px; }
     .how-sub { font-size: .83rem; color: var(--muted); }
@@ -880,7 +940,7 @@
   </div><!-- /card -->
 
   <!-- ── How it works ── -->
-  <section class="how-section reveal" aria-label="How it works">
+  <section class="how-section scan-section" aria-label="How it works">
     <div class="how-header">
       <h2 class="how-title">How it works</h2>
       <p class="how-sub">Transfer in seconds — no accounts, no installs, no waiting</p>
@@ -2597,19 +2657,42 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 });
 
 /* ── Scroll reveal ─────────────────────────────────────────────────────────── */
+/* ── Scroll reveal + scan-section ─────────────────────────────────────────── */
 (function initReveal() {
-  const obs = new IntersectionObserver((entries) => {
+  // Regular fade-up reveal (footer etc.)
+  const revealObs = new IntersectionObserver((entries) => {
     entries.forEach(e => {
       if (e.isIntersecting) {
         e.target.classList.add('is-visible');
       } else if (e.boundingClientRect.top > 0) {
-        // Element is below the viewport — reset so it re-animates next scroll-down
         e.target.classList.remove('is-visible');
       }
-      // If top < 0 the element has scrolled above the viewport — leave it visible
     });
   }, { threshold: 0.08, rootMargin: '0px 0px -32px 0px' });
-  document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
+
+  // Scan-section observer — fires as soon as the section top enters the viewport.
+  // threshold:0 + modest rootMargin means it triggers the moment the header is
+  // visible, regardless of how tall the section is.
+  const scanObs = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        // Defer to next frame so the forced reflow doesn't re-trigger the
+        // observer inside its own callback (which can cause an immediate
+        // "not intersecting" re-fire that strips scan-active before it settles).
+        requestAnimationFrame(() => {
+          e.target.classList.remove('scan-active');
+          void e.target.offsetWidth; // flush layout so CSS animation restarts
+          e.target.classList.add('scan-active');
+        });
+      } else if (e.boundingClientRect.top > 0) {
+        // Scrolled back above the section — reset ready for next pass
+        e.target.classList.remove('scan-active');
+      }
+    });
+  }, { threshold: 0, rootMargin: '0px 0px -60px 0px' });
+
+  document.querySelectorAll('.reveal').forEach(el => revealObs.observe(el));
+  document.querySelectorAll('.scan-section').forEach(el => scanObs.observe(el));
 })();
 
 </script>
