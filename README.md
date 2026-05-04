@@ -26,7 +26,7 @@ Beam removes every one of those blockers. Open the page, drop your file, share a
 ## Features
 
 - **Two transfer modes** — P2P for speed, Cloud for convenience
-- **No size limit** — P2P is unlimited; Cloud supports 20 GB+ files
+- **No size limit** — P2P is unlimited; Cloud reliably handles files up to ~5 GB (see [Filebin note](#realistic-file-size-for-cloud-mode))
 - **No account needed** — for sender or receiver
 - **Single-use download links** — Cloud links expire after first download
 - **Auto-delete** — Cloud files are deleted from storage immediately after download
@@ -58,6 +58,7 @@ Beam removes every one of those blockers. Open the page, drop your file, share a
 - ⚠️ **Cloud file deletion depends on the Worker being alive** — files are deleted from Filebin immediately on download, or by the cleanup cron within ~1 minute of the expiry time you set. If the Worker's cron is somehow not running (e.g., zero requests for a long time), Filebin's own 6-day retention acts as the final safety net. In normal operation, the expiry you choose is what counts.
 - ⚠️ **Cloud mode needs the Beam Worker** — the Cloudflare Worker must be deployed (see setup below); the hosted version at [indrajit-gitweb.github.io/beam-app](https://indrajit-gitweb.github.io/beam-app) already has this configured
 - ⚠️ **Browser memory for P2P** — very large files (multi-GB) in P2P mode are chunked but held in browser memory; Cloud mode is better for files over ~1 GB
+- ⚠️ **Filebin is "unlimited" in name, not in practice** — Filebin has no hard-coded size cap, but it is a free service run by a single developer. The realistic safe range is **1–5 GB**. Files up to ~10 GB may work but are unreliable — the upload can be killed mid-way or the bin silently deleted. "Unlimited" means no enforced limit, not that the infrastructure can absorb anything.
 
 ---
 
@@ -105,13 +106,36 @@ open index.html
 
 ---
 
+## Realistic file size for Cloud mode
+
+Filebin advertises no size limit — and technically there is no hard cap. But "unlimited" reflects the absence of a restriction, not the capacity of the infrastructure. Filebin is a free service maintained by a single developer.
+
+| File size | Cloud mode reliability |
+|-----------|----------------------|
+| Up to 1 GB | ✅ Reliable |
+| 1 GB – 5 GB | ✅ Generally works |
+| 5 GB – 10 GB | ⚠️ May work, but the upload can be dropped mid-way |
+| 10 GB+ | ❌ Not recommended — high chance of failure or silent deletion |
+
+For very large files, P2P mode (direct browser-to-browser) has no such restriction as long as both sides stay online during the transfer.
+
+---
+
 ## Setting up Cloud mode (Beam Worker)
 
-Cloud mode is powered by a **Cloudflare Worker** that:
-1. Issues single-use download tokens (stored in Cloudflare KV)
-2. Proxies the download from Filebin.net and streams it to the receiver
-3. Deletes the file from Filebin after the first download
-4. Runs a cleanup cron every minute to purge expired tokens
+### What the Cloudflare Worker actually does
+
+The Worker never touches the file bytes during upload — the browser uploads directly to Filebin. The Worker's job is purely **control and security**:
+
+| Role | What happens |
+|------|-------------|
+| **Token issuer** | After the browser finishes uploading, the Worker creates a secure single-use download token and stores it in KV |
+| **Download proxy** | When the receiver opens the link, the Worker fetches the file from Filebin and streams it to the browser — the receiver never sees the raw Filebin URL |
+| **Delete trigger** | Immediately after the stream finishes, the Worker deletes the file from Filebin |
+| **Expiry enforcer** | A cron runs every minute and deletes files + tokens that have passed their expiry time |
+| **Single-use gatekeeper** | The token is deleted from KV *before* the download starts, so the link can never be used twice even if two people click it simultaneously |
+
+**Filebin is the storage. Cloudflare Workers is the control layer on top of it.**
 
 Everything runs on Cloudflare's **free tier** — no credit card required.
 
@@ -208,8 +232,8 @@ No runtime npm dependencies — the Worker is pure JS with zero imports.
 | Cloudflare Workers | 100,000 requests/day | More than enough for personal use |
 | Cloudflare KV reads | 100,000/day | One read per download |
 | Cloudflare KV writes | 1,000/day | One write per upload |
-| Filebin.net storage | No documented limit | Files auto-deleted after download |
-| Filebin.net retention | 6 days | Reset on each access; cron cleans up on expiry |
+| Filebin.net storage | No hard cap (realistic: 1–5 GB reliably) | Files auto-deleted after download |
+| Filebin.net retention | 6 days max (fallback only) | Cron deletes on expiry; 6 days is the last-resort safety net |
 | PeerJS signalling | Free public server | `0.peerjs.com` — no account needed |
 
 ---
