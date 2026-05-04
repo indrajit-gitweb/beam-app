@@ -141,6 +141,12 @@
     .pill:hover { border-color: rgba(34,211,238,.45); color: #e0f2fe; background: rgba(14,165,233,.11); }
     .pill .dot { width: 5px; height: 5px; border-radius: 50%; background: #22d3ee; flex-shrink: 0; }
 
+    @keyframes beam-in-right {
+      0%   { transform: translateX(70vw);  filter: blur(22px); opacity: 0; }
+      58%  { transform: translateX(-10px); filter: blur(2px);  opacity: 1; }
+      78%  { transform: translateX(4px);   filter: blur(0); }
+      100% { transform: translateX(0);     filter: blur(0); }
+    }
     /* ── "Just Beam it." tagline ── */
     .just-beam {
       margin-top: 18px;
@@ -149,6 +155,7 @@
       font-family: 'Orbitron', sans-serif;
       font-size: .88rem; font-weight: 600;
       text-transform: uppercase;
+      animation: beam-in-right 0.62s 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
     }
     /* Each word gets an equal 1/3 of the line, centred within it,
        letters spread with tracking — matching the Beam header style */
@@ -1052,17 +1059,18 @@
     ctx.fillStyle = '#06060f';
     ctx.fillRect(0, 0, W, H);
 
+    const EXTRA = 5;              // buffer rows above + below for parallax headroom
     const cols = Math.ceil(W / CELL) + 2;
-    const rows = Math.ceil(H / CELL) + 2;
+    const rows = Math.ceil(H / CELL) + 2 + EXTRA * 2;
     nodes = [];
     edges = [];
 
-    // Nodes with subtle position jitter for organic PCB look
+    // Nodes — start EXTRA rows above viewport top so parallax never exposes a gap
     for (let r = 0; r < rows; r++)
       for (let c = 0; c < cols; c++)
         nodes.push({
           x: c * CELL - CELL * 0.5 + (Math.random() * 10 - 5),
-          y: r * CELL - CELL * 0.5 + (Math.random() * 10 - 5),
+          y: (r - EXTRA) * CELL - CELL * 0.5 + (Math.random() * 10 - 5),
           conns: []
         });
 
@@ -1216,16 +1224,22 @@
 
   // ── Render loop ─────────────────────────────────────────
   function frame() {
-    // Partial fade (not clearRect) → previous frame lingers at 60 % opacity
-    // This creates natural motion blur / persistence on all moving elements
+    // Partial fade in screen-space (no translate) — full-canvas motion-blur effect
     ctx.fillStyle = 'rgba(6,6,15,0.42)';
     ctx.fillRect(0, 0, W, H);
 
-    drawTraces();
+    // ── Parallax: circuit layer drifts at 20 % of page scroll speed ──
+    // As the user scrolls down, the grid shifts upward slower than the content,
+    // creating the illusion that the circuit board is on a deeper layer.
+    ctx.save();
+    ctx.translate(0, -(window.scrollY * 0.2));
 
+    drawTraces();
     for (const p of pulses) { p.step(); p.draw(); }
 
-    // Soft cursor corona — pulses near the cursor feel "attracted"
+    ctx.restore();
+
+    // Soft cursor corona — drawn in screen-space so it tracks the cursor exactly
     if (mouse.on) {
       const g = ctx.createRadialGradient(
         mouse.x, mouse.y, 0,
@@ -2588,8 +2602,11 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     entries.forEach(e => {
       if (e.isIntersecting) {
         e.target.classList.add('is-visible');
-        obs.unobserve(e.target);
+      } else if (e.boundingClientRect.top > 0) {
+        // Element is below the viewport — reset so it re-animates next scroll-down
+        e.target.classList.remove('is-visible');
       }
+      // If top < 0 the element has scrolled above the viewport — leave it visible
     });
   }, { threshold: 0.08, rootMargin: '0px 0px -32px 0px' });
   document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
