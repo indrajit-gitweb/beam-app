@@ -1,26 +1,23 @@
 /**
- * Beam Cloud Worker — Cloudflare Workers + R2
+ * Beam Cloud Worker — Cloudflare Workers
  *
- * Upload flow (chunked multipart — no size limit):
- *   POST /upload/init        browser starts upload; returns { key, uploadId }
- *   POST /upload/part        browser sends one 50 MB chunk; returns { partNumber, etag }
- *   POST /upload/complete    browser signals done; Worker seals R2 multipart,
- *                            stores token in KV; returns { ok, token, expiresAt }
+ * Storage backend: Gofile.io (free, anonymous, unlimited size, no credit card).
+ * The browser uploads directly to Gofile — the Worker never touches file bytes.
+ * Worker only stores a single-use download token in KV.
  *
- * Download flow:
- *   GET  /download/:token    validate token → delete KV → stream R2 object to browser
- *                            → delete R2 object after stream (ctx.waitUntil)
- *
- * Liveness:
- *   GET  /health             { ok, ts }
+ * Routes:
+ *   POST /register          browser uploads to Gofile, then registers the fileId +
+ *                           guestToken here. Returns { ok, token, expiresAt }.
+ *   GET  /download/:token   validates token, fetches Gofile directLink, streams
+ *                           file to client, deletes from Gofile + KV.
+ *   GET  /health            liveness check.
  *
  * Scheduled (cron "* * * * *"):
- *   Scans KV for expired dl:* entries, deletes R2 objects + KV keys.
+ *   Scans KV for expired entries, deletes Gofile files, purges KV.
  *
- * Bindings (wrangler.toml + secrets):
- *   BEAM_EXPIRY          KV namespace
- *   BEAM_BUCKET          R2 bucket
- *   BEAM_ALLOWED_ORIGIN  CORS origin (wrangler secret put BEAM_ALLOWED_ORIGIN)
+ * Bindings:
+ *   BEAM_EXPIRY          KV namespace  (no R2, no credit card needed)
+ *   BEAM_ALLOWED_ORIGIN  CORS origin secret
  */
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
@@ -29,10 +26,8 @@ function corsHeaders(origin) {
   return {
     'Access-Control-Allow-Origin':  origin || '*',
     'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-    'Access-Control-Allow-Headers':
-      'Content-Type, X-Beam-Key, X-Beam-Upload-Id, X-Beam-Part-Number, ' +
-      'X-Beam-Expiry-Minutes, X-Beam-Filename',
-    'Access-Control-Max-Age': '86400',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age':       '86400',
   };
 }
 
@@ -45,11 +40,11 @@ function json(data, status = 200, origin) {
 
 function htmlError(title, body, status, origin) {
   return new Response(
-    `<!doctype html><html><head><meta charset="utf-8">
-    <title>${title}</title>
-    <style>body{font-family:system-ui;text-align:center;padding:60px 20px;background:#06060f;color:#f1f5f9}
-    h2{font-size:1.4rem;margin-bottom:12px}p{color:#94a3b8;font-size:.9rem}</style>
-    </head><body><h2>${title}</h2><p>${body}</p></body></html>`,
+    `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
+    <style>body{font-family:system-ui;text-align:center;padding:60px 20px;
+    background:#06060f;color:#f1f5f9}h2{font-size:1.4rem;margin-bottom:12px}
+    p{color:#94a3b8}</style></head>
+    <body><h2>${title}</h2><p>${body}</p></body></html>`,
     { status, headers: { 'Content-Type': 'text/html;charset=utf-8', ...corsHeaders(origin) } },
   );
 }
@@ -63,102 +58,64 @@ function generateToken() {
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-// ─── POST /upload/init ────────────────────────────────────────────────────────
-// Body: { filename, size, type }
-// Returns: { key, uploadId }
+// ─── Gofile helpers ───────────────────────────────────────────────────────────
 
-async function handleUploadInit(request, env, origin) {
-  let body;
-  try { body = await request.json(); } catch {
-    return json({ error: 'Invalid JSON.' }, 400, origin);
-  }
-
-  const { filename, size, type } = body;
-  if (!filename || typeof filename !== 'string') {
-    return json({ error: 'filename required.' }, 400, origin);
-  }
-
-  // Unique key: timestamp + random suffix + sanitised filename
-  const rand = Math.random().toString(36).slice(2, 8);
-  const safe = filename.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
-  const key  = `uploads/${Date.now()}-${rand}-${safe}`;
-
-  const multipart = await env.BEAM_BUCKET.createMultipartUpload(key, {
-    httpMetadata: {
-      contentType:        type || 'application/octet-stream',
-      contentDisposition: `attachment; filename="${encodeURIComponent(filename)}"`,
-    },
-    customMetadata: {
-      originalName: filename,
-      fileSize:     String(size || 0),
-    },
-  });
-
-  return json({ key, uploadId: multipart.uploadId }, 200, origin);
-}
-
-// ─── POST /upload/part ────────────────────────────────────────────────────────
-// Headers: X-Beam-Key, X-Beam-Upload-Id, X-Beam-Part-Number
-// Body: raw chunk bytes (≤ 50 MB)
-// Returns: { partNumber, etag }
-
-async function handleUploadPart(request, env, origin) {
-  const key        = request.headers.get('X-Beam-Key');
-  const uploadId   = request.headers.get('X-Beam-Upload-Id');
-  const partNumber = parseInt(request.headers.get('X-Beam-Part-Number') || '0', 10);
-
-  if (!key || !uploadId || !partNumber || partNumber < 1 || partNumber > 10000) {
-    return json({ error: 'Invalid part headers.' }, 400, origin);
-  }
-
-  const multipart = env.BEAM_BUCKET.resumeMultipartUpload(key, uploadId);
-
-  let uploaded;
+/**
+ * Delete a file from Gofile using the guestToken returned at upload time.
+ * Fire-and-forget — errors are logged but not fatal.
+ */
+async function gofileDelete(fileId, guestToken) {
+  if (!fileId || !guestToken) return;
   try {
-    // Pass request.body (ReadableStream) directly — no buffering needed
-    uploaded = await multipart.uploadPart(partNumber, request.body);
+    await fetch(`https://api.gofile.io/contents/${fileId}`, {
+      method:  'DELETE',
+      headers: { Authorization: `Bearer ${guestToken}` },
+    });
   } catch (err) {
-    console.error('[beam-worker] part upload error:', err.message);
-    return json({ error: `Part upload failed: ${err.message}` }, 500, origin);
+    console.error('[beam-worker] Gofile delete error:', err.message);
   }
-
-  return json({ partNumber: uploaded.partNumber, etag: uploaded.etag }, 200, origin);
 }
 
-// ─── POST /upload/complete ────────────────────────────────────────────────────
-// Body: { key, uploadId, parts: [{partNumber, etag}], filename, size, expiryMinutes }
+/**
+ * Get the direct download URL for a Gofile file.
+ * Uses the guestToken (obtained at upload) for authenticated access.
+ */
+async function gofileDirectLink(fileId, guestToken) {
+  const res = await fetch(
+    `https://api.gofile.io/contents/${fileId}?token=${guestToken}`,
+  );
+  if (!res.ok) throw new Error(`Gofile content API HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.status !== 'ok') throw new Error(`Gofile API error: ${data.status}`);
+  const link = data.data?.directLink || data.data?.link;
+  if (!link) throw new Error('Gofile returned no download URL');
+  return link;
+}
+
+// ─── POST /register ───────────────────────────────────────────────────────────
+// Called after the browser has uploaded the file to Gofile directly.
+// Body: { fileId, guestToken, filename, size, mimeType?, expiryMinutes? }
 // Returns: { ok, token, expiresAt, expiryMinutes }
 
-async function handleUploadComplete(request, env, origin) {
+async function handleRegister(request, env, origin) {
   let body;
   try { body = await request.json(); } catch {
-    return json({ error: 'Invalid JSON.' }, 400, origin);
+    return json({ error: 'Invalid JSON body.' }, 400, origin);
   }
 
-  const { key, uploadId, parts, filename, size, expiryMinutes: rawExpiry } = body;
+  const { fileId, guestToken, filename, size, mimeType, expiryMinutes: raw } = body;
 
-  if (!key || !uploadId || !Array.isArray(parts) || parts.length === 0) {
-    return json({ error: 'key, uploadId and parts[] required.' }, 400, origin);
-  }
+  if (!fileId   || typeof fileId   !== 'string') return json({ error: 'fileId required.'   }, 400, origin);
+  if (!guestToken || typeof guestToken !== 'string') return json({ error: 'guestToken required.' }, 400, origin);
+  if (!filename || typeof filename !== 'string') return json({ error: 'filename required.' }, 400, origin);
 
-  const expiryMinutes = Math.min(Math.max(parseInt(rawExpiry, 10) || 30, 5), 1440);
-
-  // Complete the multipart upload in R2
-  const multipart = env.BEAM_BUCKET.resumeMultipartUpload(key, uploadId);
-  try {
-    await multipart.complete(parts); // parts: [{partNumber, etag}]
-  } catch (err) {
-    console.error('[beam-worker] complete error:', err.message);
-    return json({ error: `Upload complete failed: ${err.message}` }, 500, origin);
-  }
-
-  // Store download token in KV
-  const token     = generateToken();
-  const expiresAt = Date.now() + expiryMinutes * 60 * 1000;
+  const expiryMinutes = Math.min(Math.max(parseInt(raw, 10) || 30, 5), 1440);
+  const token         = generateToken();
+  const expiresAt     = Date.now() + expiryMinutes * 60 * 1000;
 
   await env.BEAM_EXPIRY.put(
     `dl:${token}`,
-    JSON.stringify({ r2Key: key, filename: filename || 'file', size: size || 0, expiresAt }),
+    JSON.stringify({ fileId, guestToken, filename, size: size || 0, mimeType: mimeType || '', expiresAt }),
     { expirationTtl: expiryMinutes * 60 },
   );
 
@@ -166,11 +123,11 @@ async function handleUploadComplete(request, env, origin) {
 }
 
 // ─── GET /download/:token ─────────────────────────────────────────────────────
-// Validates token, streams R2 object to client, deletes token + R2 object.
+// Validates token, fetches file from Gofile, streams to browser, then cleans up.
 
 async function handleDownload(token, env, origin, ctx) {
   if (!token || token.length < 10) {
-    return htmlError('Invalid link', 'This download link is invalid.', 400, origin);
+    return htmlError('Invalid link', 'This download link is not valid.', 400, origin);
   }
 
   const raw = await env.BEAM_EXPIRY.get(`dl:${token}`);
@@ -183,12 +140,13 @@ async function handleDownload(token, env, origin, ctx) {
   }
 
   let meta;
-  try { meta = JSON.parse(raw); }
-  catch { return json({ error: 'Corrupted token.' }, 500, origin); }
+  try { meta = JSON.parse(raw); } catch {
+    return json({ error: 'Corrupted token.' }, 500, origin);
+  }
 
   if (Date.now() > meta.expiresAt) {
     await env.BEAM_EXPIRY.delete(`dl:${token}`);
-    ctx.waitUntil(env.BEAM_BUCKET.delete(meta.r2Key));
+    ctx.waitUntil(gofileDelete(meta.fileId, meta.guestToken));
     return htmlError(
       '⏰ Link expired',
       'This link has passed its expiry time. Ask the sender to re-upload.',
@@ -196,31 +154,48 @@ async function handleDownload(token, env, origin, ctx) {
     );
   }
 
-  const obj = await env.BEAM_BUCKET.get(meta.r2Key);
-  if (!obj) {
-    await env.BEAM_EXPIRY.delete(`dl:${token}`);
-    return htmlError('File not found', 'The file was not found in storage.', 404, origin);
+  // Get the Gofile direct download URL
+  let directLink;
+  try {
+    directLink = await gofileDirectLink(meta.fileId, meta.guestToken);
+  } catch (err) {
+    console.error('[beam-worker] Gofile link error:', err.message);
+    return htmlError(
+      'File unavailable',
+      'The file could not be retrieved from cloud storage. It may have expired.',
+      502, origin,
+    );
   }
 
-  // Delete KV immediately — single-use enforced from this point
+  // Delete KV immediately — single-use enforced from here
   await env.BEAM_EXPIRY.delete(`dl:${token}`);
 
-  // Stream R2 → client, delete R2 object after stream completes
+  // Fetch from Gofile
+  let goRes;
+  try {
+    goRes = await fetch(directLink);
+    if (!goRes.ok) throw new Error(`Gofile HTTP ${goRes.status}`);
+  } catch (err) {
+    console.error('[beam-worker] Gofile fetch error:', err.message);
+    return htmlError('Download failed', 'Could not fetch file from cloud storage.', 502, origin);
+  }
+
+  // Pipe Gofile → client; delete file from Gofile after stream completes
   const { readable, writable } = new TransformStream();
-  const pipeAndDelete = obj.body.pipeTo(writable)
-    .then(() => env.BEAM_BUCKET.delete(meta.r2Key))
-    .catch(err => console.error('[beam-worker] stream/delete error:', err.message));
+  const pipeAndDelete = goRes.body
+    .pipeTo(writable)
+    .then(()  => gofileDelete(meta.fileId, meta.guestToken))
+    .catch(err => console.error('[beam-worker] stream error:', err.message));
   ctx.waitUntil(pipeAndDelete);
 
-  const contentType = obj.httpMetadata?.contentType || 'application/octet-stream';
-  const disposition = obj.httpMetadata?.contentDisposition
-    || `attachment; filename="${encodeURIComponent(meta.filename)}"`;
+  const contentType = meta.mimeType || 'application/octet-stream';
+  const disposition = `attachment; filename="${encodeURIComponent(meta.filename)}"`;
 
   return new Response(readable, {
     headers: {
       'Content-Type':        contentType,
       'Content-Disposition': disposition,
-      'Content-Length':      String(obj.size),
+      'Content-Length':      String(meta.size),
       'Cache-Control':       'no-store',
       ...corsHeaders(origin),
     },
@@ -246,7 +221,7 @@ async function handleScheduled(env) {
       if (now > meta.expiresAt) {
         console.log(`[beam-worker] cron: expiring ${key.name} (${meta.filename})`);
         await Promise.allSettled([
-          env.BEAM_BUCKET.delete(meta.r2Key),
+          gofileDelete(meta.fileId, meta.guestToken),
           env.BEAM_EXPIRY.delete(key.name),
         ]);
       }
@@ -268,16 +243,8 @@ async function handleRequest(request, env, ctx) {
     return json({ ok: true, ts: Date.now() }, 200, origin);
   }
 
-  if (url.pathname === '/upload/init' && request.method === 'POST') {
-    return handleUploadInit(request, env, origin);
-  }
-
-  if (url.pathname === '/upload/part' && request.method === 'POST') {
-    return handleUploadPart(request, env, origin);
-  }
-
-  if (url.pathname === '/upload/complete' && request.method === 'POST') {
-    return handleUploadComplete(request, env, origin);
+  if (url.pathname === '/register' && request.method === 'POST') {
+    return handleRegister(request, env, origin);
   }
 
   const dlMatch = url.pathname.match(/^\/download\/([A-Za-z0-9\-_]{10,})$/);

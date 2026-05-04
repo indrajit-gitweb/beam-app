@@ -1,7 +1,7 @@
 {
   "name": "beam-worker",
   "version": "1.0.0",
-  "description": "Cloudflare Worker for Beam cloud transfer mode — R2 multipart upload, KV tokens, streaming download",
+  "description": "Cloudflare Worker for Beam cloud transfer mode — Gofile.io direct upload, KV tokens, streaming download",
   "main": "src/index.js",
   "scripts": {
     "dev": "wrangler dev",

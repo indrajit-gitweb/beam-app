@@ -1344,73 +1344,84 @@ async function startCloudUpload() {
   showCloudLink(cloudUrl, expiresAt);
 }
 
-// Chunked multipart upload to Cloudflare Worker → R2.
-// Splits the file into 50 MB slices; each slice is a separate POST /upload/part.
-// No browser size limit — works for files from 1 byte to 20 GB+.
-const CHUNK_SIZE = 50 * 1024 * 1024; // 50 MB
+// Direct upload to Gofile.io (free, no account, no credit card, unlimited size).
+// Browser uploads the file straight to Gofile via XHR (real progress events),
+// then registers the Gofile fileId with the Worker so it can issue a download token.
+// Works for files from 1 byte to 20 GB+ — no chunking needed.
 
 async function uploadFileToWorker(file, expiryMinutes, onProgress) {
 
-  // ── Step 1: Init multipart upload ──────────────────────────────────────────
+  // ── Step 1: Find the best Gofile server ────────────────────────────────────
   onProgress(2, 'Connecting…');
-  const initRes = await fetch(`${BEAM_WORKER_URL}/upload/init`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ filename: file.name, size: file.size, type: file.type || '' }),
-  });
-  if (!initRes.ok) {
-    const e = await initRes.json().catch(() => ({}));
-    throw new Error(e.error || `Init failed (HTTP ${initRes.status})`);
+  let server;
+  try {
+    const srvRes = await fetch('https://api.gofile.io/servers');
+    if (!srvRes.ok) throw new Error(`HTTP ${srvRes.status}`);
+    const srvData = await srvRes.json();
+    server = srvData?.data?.servers?.[0]?.name;
+    if (!server) throw new Error('No server in response');
+  } catch (err) {
+    throw new Error(`Could not reach Gofile servers: ${err.message}`);
   }
-  const { key, uploadId } = await initRes.json();
 
-  // ── Step 2: Upload chunks ───────────────────────────────────────────────────
-  const totalParts = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-  const parts      = [];
+  // ── Step 2: XHR upload to Gofile (real progress events) ────────────────────
+  onProgress(5, 'Starting upload…');
+  const { fileId, guestToken } = await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `https://${server}.gofile.io/contents/uploadFile`);
 
-  for (let i = 0; i < totalParts; i++) {
-    const start = i * CHUNK_SIZE;
-    const chunk = file.slice(start, start + CHUNK_SIZE);
-    const pct   = Math.round(((i + 0.5) / totalParts) * 94) + 2; // 2–96%
-    onProgress(pct, `Part ${i + 1} / ${totalParts}  (${formatBytes(start + chunk.size)} of ${formatBytes(file.size)})`);
-
-    let partRes;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      partRes = await fetch(`${BEAM_WORKER_URL}/upload/part`, {
-        method:  'POST',
-        headers: {
-          'Content-Type':          'application/octet-stream',
-          'X-Beam-Key':            key,
-          'X-Beam-Upload-Id':      uploadId,
-          'X-Beam-Part-Number':    String(i + 1),
-        },
-        body: chunk,
-      });
-      if (partRes.ok) break;
-      if (attempt === 3) {
-        const e = await partRes.json().catch(() => ({}));
-        throw new Error(e.error || `Part ${i + 1} failed after 3 attempts (HTTP ${partRes.status})`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        // Map 0→100% upload progress to 5→93% overall progress
+        const pct = Math.round((e.loaded / e.total) * 88) + 5;
+        onProgress(pct, `${formatBytes(e.loaded)} of ${formatBytes(e.total)}`);
       }
-      await new Promise(r => setTimeout(r, 800 * attempt)); // back-off
-    }
+    };
 
-    const { partNumber, etag } = await partRes.json();
-    parts.push({ partNumber, etag });
-  }
+    xhr.onload = () => {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (data.status !== 'ok') {
+          reject(new Error(data.message || `Gofile upload error: ${data.status}`));
+          return;
+        }
+        resolve({
+          fileId:     data.data.fileId,
+          guestToken: data.data.guestToken,
+        });
+      } catch (e) {
+        reject(new Error('Invalid response from Gofile'));
+      }
+    };
 
-  // ── Step 3: Complete multipart upload ──────────────────────────────────────
-  onProgress(97, 'Finalising…');
-  const completeRes = await fetch(`${BEAM_WORKER_URL}/upload/complete`, {
+    xhr.onerror  = () => reject(new Error('Network error during upload.'));
+    xhr.ontimeout = () => reject(new Error('Upload timed out.'));
+
+    const fd = new FormData();
+    fd.append('file', file, file.name);
+    xhr.send(fd);
+  });
+
+  // ── Step 3: Register with Worker — get single-use download token ────────────
+  onProgress(95, 'Securing link…');
+  const regRes = await fetch(`${BEAM_WORKER_URL}/register`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ key, uploadId, parts, filename: file.name, size: file.size, expiryMinutes }),
+    body:    JSON.stringify({
+      fileId,
+      guestToken,
+      filename:      file.name,
+      size:          file.size,
+      mimeType:      file.type || 'application/octet-stream',
+      expiryMinutes,
+    }),
   });
-  if (!completeRes.ok) {
-    const e = await completeRes.json().catch(() => ({}));
-    throw new Error(e.error || `Complete failed (HTTP ${completeRes.status})`);
+  if (!regRes.ok) {
+    const e = await regRes.json().catch(() => ({}));
+    throw new Error(e.error || `Register failed (HTTP ${regRes.status})`);
   }
   onProgress(100, 'Done');
-  return completeRes.json(); // { ok, token, expiresAt }
+  return regRes.json(); // { ok, token, expiresAt, expiryMinutes }
 }
 
 function showCloudLink(url, expiresAt) {

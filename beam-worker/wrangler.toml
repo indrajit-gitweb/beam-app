@@ -2,19 +2,13 @@ name             = "beam-worker"
 main             = "src/index.js"
 compatibility_date = "2025-01-01"
 
-# ── R2 bucket — stores uploaded file chunks (up to 5 TB per file, 10 GB-mo free) ──
-[[r2_buckets]]
-binding     = "BEAM_BUCKET"
-bucket_name = "beam-files"
-# preview_bucket_name = "beam-files-dev"   # optional, for `wrangler dev`
-
 # ── KV namespace — stores single-use download tokens ─────────────────────────
 [[kv_namespaces]]
 binding = "BEAM_EXPIRY"
 id      = "1e017e87467341288d06807340155b2a"
 # preview_id = ""   # optional, for `wrangler dev`
 
-# ── Cron — clean up expired R2 objects every minute ──────────────────────────
+# ── Cron — clean up expired KV entries every minute ──────────────────────────
 [triggers]
 crons = ["* * * * *"]
 
