@@ -137,16 +137,19 @@
 
     /* ── "Just Beam it." tagline ── */
     .just-beam {
-      margin-top: 16px;
+      margin-top: 18px;
+      width: 100%;
+      display: flex; justify-content: space-between; align-items: baseline;
       font-family: 'Orbitron', sans-serif;
-      font-size: .7rem; font-weight: 500;
-      letter-spacing: .12em; text-transform: uppercase;
-      color: #334155;
+      font-size: .72rem; font-weight: 600;
+      letter-spacing: .1em; text-transform: uppercase;
     }
-    .just-beam .beam-word {
-      background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
+    .jb-just { color: #00ffff; }
+    .jb-beam {
+      background: linear-gradient(90deg, #00ffff 0%, #00e5a0 50%, #00ff41 100%);
       -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
     }
+    .jb-it { color: #00ff41; }
 
     /* ── Card ── */
     .card { width: 100%; background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--radius); box-shadow: var(--shadow); animation: fade-up .7s .1s cubic-bezier(.22,1,.36,1) both; position: relative; overflow: hidden; }
@@ -549,21 +552,21 @@
 <div class="page">
 
   <header class="header">
-    <p class="brand-super">Zero-Server &nbsp;·&nbsp; File Transfer</p>
+    <p class="brand-super">Serverless &nbsp;·&nbsp; File Transfer</p>
     <div class="logo-wrap">
       <span class="logo-text">Beam</span>
       <div class="logo-glow"></div>
     </div>
     <p class="tagline">
       <span class="hl">Drop a file. Share a link.</span><br>
-      No accounts, no cloud, <span class="hl-cyan">no limits</span>.
+      No Account, No Data Storage, <span class="hl-cyan">No Limits</span>.
     </p>
     <div class="pills">
       <span class="pill"><span class="dot"></span>End-to-end encrypted</span>
       <span class="pill"><span class="dot"></span>No size limit</span>
-      <span class="pill"><span class="dot"></span>Zero server uploads</span>
+      <span class="pill"><span class="dot"></span>Zero file storage</span>
     </div>
-    <p class="just-beam">Just <span class="beam-word">Beam</span> it.</p>
+    <p class="just-beam"><span class="jb-just">Just</span><span class="jb-beam">Beam</span><span class="jb-it">it.</span></p>
   </header>
 
   <div class="card">
