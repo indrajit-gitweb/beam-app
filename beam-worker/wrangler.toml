@@ -8,9 +8,9 @@ binding = "BEAM_EXPIRY"
 id      = "1e017e87467341288d06807340155b2a"
 # preview_id = ""   # optional, for `wrangler dev`
 
-# ── Cron — clean up expired KV entries every minute ──────────────────────────
+# ── Cron — clean up expired KV entries every hour ────────────────────────────
 [triggers]
-crons = ["* * * * *"]
+crons = ["0 * * * *"]
 
 # ── Secrets (set via `wrangler secret put`) ───────────────────────────────────
 # BEAM_ALLOWED_ORIGIN  — CORS origin your Beam page is served from
