@@ -1,0 +1,95 @@
+name: Build Desktop Packages
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'index.html'
+      - 'beam-electron/**'
+      - '.github/workflows/build-desktop.yml'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false   # keep building other platforms if one fails
+      matrix:
+        include:
+          - os: macos-latest
+            platform: Mac
+            build_cmd: npm run build:mac
+            artifact_name: Beam-Desktop-Mac
+
+          - os: ubuntu-latest
+            platform: Linux
+            build_cmd: npm run build:linux
+            artifact_name: Beam-Desktop-Linux
+
+          - os: windows-latest
+            platform: Windows
+            build_cmd: npm run build:win
+            artifact_name: Beam-Desktop-Windows
+
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: beam-electron/package-lock.json
+
+      # macOS DMG tool requires the 'python' command (not 'python3')
+      - name: Ensure python symlink (macOS only)
+        if: matrix.os == 'macos-latest'
+        run: command -v python || ln -sf $(which python3) /usr/local/bin/python
+
+      - name: Install dependencies
+        working-directory: beam-electron
+        run: npm install
+
+      - name: Build ${{ matrix.platform }} packages
+        working-directory: beam-electron
+        run: ${{ matrix.build_cmd }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List built packages
+        working-directory: beam-electron
+        run: |
+          echo "=== Built packages ==="
+          ls -lh dist/ | grep -v "blockmap\|unpacked\|builder-debug\|^d"
+
+      - name: Upload Mac packages
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            beam-electron/dist/*.dmg
+            beam-electron/dist/*-mac.zip
+          retention-days: 30
+
+      - name: Upload Linux packages
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: beam-electron/dist/*.AppImage
+          retention-days: 30
+
+      - name: Upload Windows packages
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: beam-electron/dist/*.exe
+          retention-days: 30
