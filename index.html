@@ -2759,14 +2759,47 @@ function startSenderPeer() {
       setStatus(sendStatus, '📋 File list sent — waiting for receiver to start download…', 'info');
     });
 
+    // Speed tracking for recv-progress updates
+    let _recvSpeedBytes = 0, _recvSpeedTime = Date.now();
+
     conn.on('data', msg => {
       if (msg?.type === 'start-transfer') {
         selectedFileIndices = msg.selected === 'all' ? null : new Set(msg.selected);
         setStatus(sendStatus, '📤 Receiver accepted — starting transfer…', 'info');
         runSenderSession();
-      } else if (msg?.type === 'file-done')    { resolveAck('done'); }
-      else if (msg?.type === 'file-skip')      { skipCurrentFile = true; resolveAck('skip'); }
-      else if (msg?.type === 'cancel-all')     { abortAll = true; skipCurrentFile = true; resolveAck('cancel'); }
+
+      } else if (msg?.type === 'recv-progress') {
+        // Real-time progress from receiver — update sender's bar with actual bytes received
+        const recv  = msg.bytesReceived;
+        const total = msg.totalSize;
+        const now   = Date.now();
+
+        const deltaSecs  = Math.max((now - _recvSpeedTime) / 1000, 0.1);
+        const speed      = (recv - _recvSpeedBytes) / deltaSecs; // bytes/sec
+        _recvSpeedBytes  = recv;
+        _recvSpeedTime   = now;
+
+        const pct     = Math.min(Math.round(recv / total * 100), 99); // 99% max until file-done
+        const speedFmt = speed > 1048576
+          ? `${(speed / 1048576).toFixed(1)} MB/s`
+          : `${(speed / 1024).toFixed(0)} KB/s`;
+        const remSecs  = speed > 0 ? (total - recv) / speed : 0;
+        const remStr   = remSecs > 60
+          ? `${Math.floor(remSecs / 60)}m ${Math.floor(remSecs % 60)}s left`
+          : remSecs > 1 ? `${Math.ceil(remSecs)}s left` : '';
+
+        setProgress(sendFill, sendStats, pct);
+        updateSendSize(recv, total, speedFmt);
+        sendProgressLbl.textContent = remStr
+          ? `Receiver getting file… ${remStr}`
+          : 'Receiver getting file…';
+
+      } else if (msg?.type === 'file-done') {
+        _recvSpeedBytes = 0; _recvSpeedTime = Date.now(); // reset for next file
+        resolveAck('done');
+      }
+      else if (msg?.type === 'file-skip')  { skipCurrentFile = true; resolveAck('skip'); }
+      else if (msg?.type === 'cancel-all') { abortAll = true; skipCurrentFile = true; resolveAck('cancel'); }
     });
 
     conn.on('close', () => {
@@ -2824,16 +2857,17 @@ async function runSenderSession() {
     const chunks = await chunkFile(file);
     conn.send({ type: 'meta', name: file.name, size: file.size, fileType: file.type, totalChunks: chunks.length, fileIndex: i, totalFiles: filesToSend.length });
 
-    const t0 = Date.now();
+    // Reset progress — actual % comes from recv-progress ACKs from receiver
+    setProgress(sendFill, sendStats, 0);
+    updateSendSize(0, file.size);
+    sendProgressLbl.textContent = 'Sending to receiver…';
+    sendSpeedTag.style.display = 'none';
+
     for (let j = 0; j < chunks.length; j++) {
       if (skipCurrentFile || abortAll) break;
       conn.send({ type: 'chunk', data: chunks[j] });
-      const bytes = Math.min((j+1)*CHUNK, file.size);
-      const pct   = Math.round((j+1)/chunks.length*100);
-      const speed = formatBytes(Math.round(bytes/((Date.now()-t0)/1000||0.001)))+'/s';
-      setProgress(sendFill, sendStats, pct);
-      updateSendSize(bytes, file.size, speed);
-      if ((j+1)%10===0) await new Promise(r=>setTimeout(r,0));
+      // Yield every 10 chunks so the event loop can process incoming recv-progress ACKs
+      if ((j+1) % 10 === 0) await new Promise(r => setTimeout(r, 0));
     }
 
     if (abortAll) break;
@@ -3100,6 +3134,11 @@ function startReceiver() {
         setProgress(recvFill, recvStats, pct);
         updateRecvSize(bytesReceived, currentMeta.size);
         incomingMeta.textContent = `${formatBytes(bytesReceived)} of ${formatBytes(currentMeta.size)}`;
+
+        // Send real-time progress to sender every 10 chunks so their bar tracks actual delivery
+        if (currentChunks.length % 10 === 0) {
+          conn.send({ type: 'recv-progress', bytesReceived, totalSize: currentMeta.size });
+        }
 
         if (currentChunks.length === currentMeta.totalChunks) {
           const blob = reassembleChunks(currentChunks, { type: currentMeta.fileType });
