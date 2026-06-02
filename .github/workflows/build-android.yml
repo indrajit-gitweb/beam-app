@@ -23,15 +23,18 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
       - name: Accept Android SDK licenses
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
+          $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
             "platforms;android-34" \
-            "build-tools;34.0.0" \
-            "platform-tools" 2>/dev/null || true
+            "build-tools;34.0.0" 2>/dev/null || true
+
+      - name: Set SDK path in local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > beam-android/local.properties
+          echo "SDK path set to: $ANDROID_SDK_ROOT"
 
       - name: Copy latest index.html into Android assets
         run: |
@@ -53,8 +56,6 @@ jobs:
       - name: Build debug APK
         working-directory: beam-android
         run: ./gradlew assembleDebug --no-daemon --stacktrace
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -67,8 +68,7 @@ jobs:
         run: |
           APK=beam-android/app/build/outputs/apk/debug/app-debug.apk
           if [ -f "$APK" ]; then
-            echo "✅ APK built successfully"
-            echo "Size: $(du -sh $APK | cut -f1)"
+            echo "✅ APK built successfully — $(du -sh $APK | cut -f1)"
           else
             echo "❌ APK not found"
             exit 1
