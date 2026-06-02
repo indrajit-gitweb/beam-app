@@ -4216,21 +4216,33 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // ── Disable Offline mode in web browser — requires desktop or Android app ──
   const _isOfflineAvailable = IS_ELECTRON || IS_ANDROID_NATIVE;
 
-  if (!_isOfflineAvailable) {
-    // Strong visual: red dashed border + grayed out + in-card message + badge
-    modeOfflineCard.classList.add('unavailable');
-    modeOfflineCard.setAttribute('aria-disabled', 'true');
-
-    // Show "App only" red badge
+  function applyOfflineUnavailableStyles() {
+    if (_isOfflineAvailable) return;
+    const card = document.getElementById('mode-offline');
+    if (!card) return;
+    card.classList.add('unavailable');
+    card.setAttribute('aria-disabled', 'true');
     const tag = document.getElementById('offline-app-tag');
     if (tag) tag.style.display = 'inline-flex';
-
-    // Show in-card warning message (already in HTML, just needs display)
-    // The CSS handles this via .mode-card.offline.unavailable .offline-app-required-msg
-
-    // Show warning in "How it works" Offline tab too
     const hiwWarning = document.getElementById('hiw-offline-browser-warning');
     if (hiwWarning) hiwWarning.style.display = 'block';
+  }
+
+  // Apply immediately (in case DOM is ready)
+  applyOfflineUnavailableStyles();
+
+  // Also apply whenever the mode selector becomes visible (files queued)
+  // Use MutationObserver to catch when #mode-selector display changes
+  if (!_isOfflineAvailable) {
+    const modeSelector = document.getElementById('mode-selector');
+    if (modeSelector) {
+      const obs = new MutationObserver(() => {
+        if (modeSelector.style.display !== 'none') {
+          applyOfflineUnavailableStyles();
+        }
+      });
+      obs.observe(modeSelector, { attributes: true, attributeFilter: ['style'] });
+    }
   }
 
   const _origSelectMode = window.selectMode;
@@ -5521,6 +5533,45 @@ window.dismissRetrySection = function() {
 
   } // end autoConnectWithUrl
 
+})();
+
+/* ── Apply Offline mode unavailable state for web browser users ──────────────
+   Runs independently of initOfflineMode to avoid any IIFE error dependency.
+   Uses a MutationObserver on the mode-selector so it fires the moment files
+   are queued and the selector becomes visible.                               */
+(function applyOfflineBrowserRestriction() {
+  const isApp = !!(window.electronAPI || window.BeamNative || window.__BEAM_NATIVE_ANDROID__);
+  if (isApp) return;
+
+  // Mark body so CSS can apply styles without timing issues
+  document.body.setAttribute('data-beam-browser', 'true');
+
+  function markUnavailable() {
+    const card = document.getElementById('mode-offline');
+    if (!card) return;
+    card.classList.add('unavailable');
+    card.setAttribute('aria-disabled', 'true');
+    const tag = document.getElementById('offline-app-tag');
+    if (tag) tag.style.display = 'inline-flex';
+    const warn = document.getElementById('hiw-offline-browser-warning');
+    if (warn) warn.style.display = 'block';
+  }
+
+  markUnavailable();
+
+  // Re-apply whenever mode selector becomes visible (files queued)
+  const selector = document.getElementById('mode-selector');
+  if (selector) {
+    new MutationObserver(() => markUnavailable())
+      .observe(selector, { attributes: true, attributeFilter: ['style'] });
+  }
+
+  // Belt-and-suspenders: periodic check for 10s
+  let attempts = 0;
+  const iv = setInterval(() => {
+    markUnavailable();
+    if (++attempts >= 20) clearInterval(iv);
+  }, 500);
 })();
 
 </script>
