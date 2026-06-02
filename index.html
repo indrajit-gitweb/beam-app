@@ -3272,17 +3272,32 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // ── LAN Server connection ──────────────────────────────────────────────────
 
   async function getLanServerUrl() {
+    // ── Electron: LAN server always on localhost ──
     if (IS_ELECTRON) {
-      // Electron: LAN server is always on localhost
       const info = await window.electronAPI.getLanInfo();
       return info ? `ws://localhost:${info.port}` : null;
     }
-    // Browser: try to find a LAN server on the network
-    // First check if we were served from a LAN server (non-localhost origin)
+
+    // ── Android native app: use URL from NSD/mDNS discovery ──
+    // BeamNative.getLanServerUrl() returns the Mac's LAN server URL
+    // discovered by LanDiscovery.kt (e.g. "http://192.168.1.5:7777").
+    // If not yet discovered, we return null and retry when onLanServerFound fires.
+    if (IS_ANDROID_NATIVE && window.BeamNative) {
+      const url = window.BeamNative.getLanServerUrl();
+      if (url && url.length > 0) {
+        return url.replace(/^http/, 'ws');
+      }
+      return null; // Discovery still in progress — autoDetectConnection will retry
+    }
+
+    // ── Browser served from a LAN server (non-standard origin) ──
     const origin = window.location.origin;
-    if (!origin.includes('localhost') && !origin.includes('127.0.0.1') &&
-        !origin.includes('github.io') && !origin.includes('pages')) {
-      // We were likely served from a Beam LAN server — use same host
+    if (origin && origin !== 'null' &&
+        !origin.includes('localhost') &&
+        !origin.includes('127.0.0.1') &&
+        !origin.includes('github.io') &&
+        !origin.includes('pages') &&
+        window.location.hostname) {
       return `ws://${window.location.hostname}:${LAN_PORT}`;
     }
     return null;
@@ -3552,10 +3567,24 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
             }
           }
 
-          // Signal all done
+          // All chunks pushed into send buffer — show "delivering" state.
+          // Don't mark success yet: data is still in-flight to the receiver.
+          onProgress(99, '⚡ Delivering to receiver…');
           ch.send(JSON.stringify({ done: true, totalFiles: files.length }));
-          ch.close();
-          done({ success: true });
+
+          // ch.close() is called by the RECEIVER after all chunks are saved.
+          // The sender's onclose fires only after the receiver confirms and
+          // closes their end — this is the true "transfer complete" signal.
+          // Give receiver up to 60s to confirm before timing out.
+          const deliverTimer = setTimeout(() => {
+            done({ success: false, reason: 'receiver did not confirm within 60 s' });
+          }, 60000);
+
+          ch.onclose = () => {
+            clearTimeout(deliverTimer);
+            done({ success: true });
+          };
+
         } catch (err) {
           done({ success: false, reason: err.message });
         }
@@ -3882,6 +3911,18 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     autoDetectConnection();
   };
 
+  // Called by MainActivity.kt when NSD/mDNS discovers the Beam LAN server.
+  // If Offline mode was waiting for discovery, retry autoDetectConnection now.
+  const _prevOnLanServerFound = window.onLanServerFound;
+  window.onLanServerFound = function(url) {
+    if (_prevOnLanServerFound) _prevOnLanServerFound(url);
+    if (window._pendingOfflineDetect) {
+      window._pendingOfflineDetect = false;
+      console.log('[beam] LAN server found via NSD:', url, '— retrying offline detect');
+      autoDetectConnection();
+    }
+  };
+
   function disconnectLan() {
     if (lanWs) { lanWs.close(); lanWs = null; }
     if (rtcConn) { rtcConn.close(); rtcConn = null; }
@@ -3897,9 +3938,28 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     document.getElementById('offline-android-box').style.display   = 'none';
     document.getElementById('offline-detect-ring').style.display   = '';
     document.getElementById('offline-detect-title').textContent    = 'Detecting best connection…';
-    document.getElementById('offline-detect-sub').textContent      = 'Checking network and Bluetooth availability';
+    document.getElementById('offline-detect-sub').textContent      =
+      IS_ANDROID_NATIVE
+        ? 'Searching for Beam desktop app on your WiFi…'
+        : 'Checking network and Bluetooth availability';
 
     offlineConnType = 'wifi';
+
+    // On Android, NSD discovery runs in the background. If getLanServerUrl()
+    // returns empty (not yet discovered), register a one-shot onLanServerFound
+    // listener that re-runs autoDetectConnection when the Mac is found.
+    if (IS_ANDROID_NATIVE && window.BeamNative) {
+      const existingUrl = window.BeamNative.getLanServerUrl();
+      if (!existingUrl) {
+        document.getElementById('offline-detect-title').textContent =
+          'Looking for Beam on your network…';
+        document.getElementById('offline-detect-sub').textContent =
+          'Make sure the Beam desktop app is open on the same WiFi';
+        // onLanServerFound is called by MainActivity when NSD resolves
+        window._pendingOfflineDetect = true;
+        return; // Will be re-triggered by onLanServerFound
+      }
+    }
 
     // Try to connect to LAN server
     const ws = await connectLanServer();
@@ -4537,27 +4597,55 @@ window.dismissRetrySection = function() {
 /* ── Auto-connect to LAN server when loaded from a LAN URL (Android / browser) ─ */
 
 (function autoConnectIfLanServer() {
-  // Only run in browser context — Electron handles its own connection via selectMode
+  // Only run in browser/Android context — Electron handles its own connection
   if (window.electronAPI) return;
 
-  const origin = window.location.origin;
-  const isFromLanServer =
-    !origin.includes('localhost') &&
-    !origin.includes('127.0.0.1') &&
-    !origin.includes('github.io') &&
-    !origin.includes('pages');
-
-  if (!isFromLanServer) return;
-
-  // Served from a Beam LAN server — auto-connect immediately
   const LAN_PORT   = 7777;
-  const wsUrl      = `ws://${window.location.hostname}:${LAN_PORT}`;
   const myId       = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
     const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
   });
-  const myName     = navigator.platform || 'Mobile Device';
+  const myName     = (window.BeamNative?.getDeviceName?.() || navigator.platform || 'Mobile Device');
   const deviceType = navigator.maxTouchPoints > 0 ? 'phone' : 'laptop';
 
+  // ── Resolve the WebSocket URL ──────────────────────────────────────────────
+  // Android native app: URL comes from NSD/mDNS discovery via BeamNative
+  // Browser served from LAN: use window.location.hostname
+  let wsUrl = null;
+
+  if (window.BeamNative || window.__BEAM_NATIVE_ANDROID__) {
+    // Android native app — get discovered URL from LanDiscovery.kt
+    const httpUrl = window.BeamNative?.getLanServerUrl?.() || '';
+    if (httpUrl) {
+      wsUrl = httpUrl.replace(/^http/, 'ws');
+    } else {
+      // Not yet discovered — wait for onLanServerFound callback
+      const _prev = window.onLanServerFound;
+      window.onLanServerFound = function(url) {
+        if (_prev) _prev(url);
+        // Re-run this function now that we have the URL
+        window.__beamLanUrl = url.replace(/^http/, 'ws');
+        autoConnectWithUrl(window.__beamLanUrl);
+      };
+      return;
+    }
+  } else {
+    // Browser served from Beam LAN server
+    const origin = window.location.origin;
+    const isFromLanServer =
+      origin && origin !== 'null' &&
+      !origin.includes('localhost') &&
+      !origin.includes('127.0.0.1') &&
+      !origin.includes('github.io') &&
+      !origin.includes('pages') &&
+      !!window.location.hostname;
+
+    if (!isFromLanServer) return;
+    wsUrl = `ws://${window.location.hostname}:${LAN_PORT}`;
+  }
+
+  autoConnectWithUrl(wsUrl);
+
+  function autoConnectWithUrl(wsUrl) {
   const ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
@@ -4783,6 +4871,8 @@ window.dismissRetrySection = function() {
     console.log('[beam-lan] Accept: WebRTC ready, sending transfer-accept to', sender.id);
     ws.send(JSON.stringify({ type: 'transfer-accept', to: sender.id }));
   };
+
+  } // end autoConnectWithUrl
 
 })();
 
