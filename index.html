@@ -4279,28 +4279,41 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
           });
         }
       } else {
-        // No LAN server found — show demo mode notice
+        // No LAN server found
+        if (IS_ANDROID_NATIVE) {
+          // On Android: never show demo mode — show the not-found screen instead
+          document.getElementById('offline-detect-ring').style.display = 'none';
+          showOfflineStep('notfound');
+          document.getElementById('offline-notfound-title').textContent = 'No Beam device found';
+          document.getElementById('offline-notfound-msg').textContent =
+            'Could not connect to a Beam LAN server on this WiFi network.';
+          document.getElementById('offline-notfound-hint').innerHTML =
+            '• Open the <strong>Beam desktop app</strong> on Mac, Windows, or Linux<br>' +
+            '• Make sure it\'s on the <strong>same WiFi</strong> as this phone<br>' +
+            '• Or tap <strong>Scan QR</strong> / enter the IP address below';
+          return;
+        }
         document.getElementById('offline-chosen-mode-line').innerHTML =
-          '<svg class="icon" width="14" height="14"><use href="#ico-wifi"/></svg> Demo mode — no LAN server detected';
+          '<svg class="icon" width="14" height="14"><use href="#ico-wifi"/></svg> Browser demo mode';
         document.getElementById('offline-chosen-why').textContent =
           IS_ELECTRON
             ? 'Starting LAN server… please wait a moment and try again.'
-            : 'No Beam LAN server found on this network. Download the Beam desktop app to enable real offline transfers. Showing demo mode.';
+            : 'No Beam LAN server found. Showing demo mode for browser testing only.';
         document.getElementById('offline-chosen-fallback').textContent =
-          'Get the desktop app at: beam-app/beam-electron';
+          'Install the Beam desktop app to enable real offline transfers.';
       }
       document.getElementById('offline-chosen-result').style.display = 'block';
 
       setTimeout(() => {
         document.getElementById('offline-scanning-title').textContent =
-          ws ? 'Searching for nearby devices on WiFi…' : 'Demo mode — showing simulated devices';
+          ws ? 'Searching for nearby devices on WiFi…' : 'Searching for nearby devices…';
         document.getElementById('offline-scan-note').textContent =
           ws ? 'Make sure the receiver has Beam open on the same network'
              : 'Real devices appear here when the desktop app is running';
         showOfflineStep('scanning');
 
         setTimeout(() => {
-          const deviceList = ws ? peers : FAKE_DEVICES;
+          const deviceList = ws ? peers : (IS_ANDROID_NATIVE ? [] : FAKE_DEVICES);
           renderDeviceList(deviceList);
 
           // Show QR code if Android is running its own server
@@ -4356,8 +4369,9 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     const container = document.getElementById('offline-device-items');
     container.innerHTML = '';
 
+    // Never show fake devices on Android — only on browser for demo purposes
     const list = deviceList.length > 0 ? deviceList
-      : (lanWs ? [] : FAKE_DEVICES.slice(0, 2 + Math.floor(Math.random() * 3)));
+      : (lanWs || IS_ANDROID_NATIVE ? [] : FAKE_DEVICES.slice(0, 2 + Math.floor(Math.random() * 3)));
 
     if (list.length === 0) {
       container.innerHTML = `<div style="text-align:center;padding:20px;color:var(--muted);font-size:.8rem">
@@ -4406,8 +4420,13 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         document.getElementById('offline-fail-detail').textContent =
           `${dev.name} did not accept the transfer in time. Make sure they have the Beam page open and tapped Accept on the incoming popup.`;
       }, 60000);
+    } else if (IS_ANDROID_NATIVE) {
+      // Android with no LAN connection — show error, never simulate
+      showOfflineStep('fail');
+      document.getElementById('offline-fail-detail').textContent =
+        'Not connected to a Beam LAN server. Go back and scan the QR code or enter the IP address of the Beam desktop app.';
     } else {
-      // Demo mode: simulate acceptance after 2.5s
+      // Browser demo mode only — simulate acceptance after 2.5s
       setTimeout(() => startSimulatedTransfer(), 2500);
     }
   }
@@ -4682,9 +4701,8 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }
     showRecvState('waiting');
 
-    // If connected to LAN server, wait for real incoming requests
-    // Otherwise simulate
-    if (!lanWs) {
+    // Wait for real incoming requests — never simulate on Android
+    if (!lanWs && !IS_ANDROID_NATIVE) {
       setTimeout(() => simulateIncoming(), 4000);
     }
   }
@@ -4759,7 +4777,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     if (pctEl)  pctEl.textContent  = '0%';
     recvBuffer = []; recvMeta = null; recvChunksGot = 0;
     showRecvState('waiting');
-    if (!lanWs) setTimeout(() => simulateIncoming(), 3500);
+    if (!lanWs && !IS_ANDROID_NATIVE) setTimeout(() => simulateIncoming(), 3500);
   };
 
 })();
