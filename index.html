@@ -2857,17 +2857,36 @@ async function runSenderSession() {
     const chunks = await chunkFile(file);
     conn.send({ type: 'meta', name: file.name, size: file.size, fileType: file.type, totalChunks: chunks.length, fileIndex: i, totalFiles: filesToSend.length });
 
-    // Reset progress — actual % comes from recv-progress ACKs from receiver
+    // Reset progress for this file
     setProgress(sendFill, sendStats, 0);
     updateSendSize(0, file.size);
-    sendProgressLbl.textContent = 'Sending to receiver…';
+    sendProgressLbl.textContent = n > 1 ? `Sending file ${i+1} of ${n}…` : 'Sending…';
     sendSpeedTag.style.display = 'none';
 
+    const t0 = Date.now();
     for (let j = 0; j < chunks.length; j++) {
       if (skipCurrentFile || abortAll) break;
       conn.send({ type: 'chunk', data: chunks[j] });
-      // Yield every 10 chunks so the event loop can process incoming recv-progress ACKs
-      if ((j+1) % 10 === 0) await new Promise(r => setTimeout(r, 0));
+
+      // Show live local queue progress + speed every 10 chunks
+      // Label: "Queuing…" so user knows data is being buffered, not yet confirmed received.
+      // recv-progress ACKs from receiver will overwrite this with accurate delivery progress.
+      if ((j+1) % 10 === 0) {
+        const bytesSent = Math.min((j+1) * CHUNK, file.size);
+        const elapsed   = Math.max((Date.now() - t0) / 1000, 0.001);
+        const speed     = bytesSent / elapsed;
+        const speedFmt  = speed > 1048576
+          ? `${(speed/1048576).toFixed(1)} MB/s`
+          : `${(speed/1024).toFixed(0)} KB/s`;
+        // Cap at 80% — the remaining 80→100% comes from receiver ACKs
+        const pct = Math.min(Math.round(bytesSent / file.size * 80), 80);
+        setProgress(sendFill, sendStats, pct);
+        updateSendSize(bytesSent, file.size, speedFmt);
+        sendProgressLbl.textContent = n > 1
+          ? `Queuing file ${i+1} of ${n}…`
+          : 'Queuing for transfer…';
+        await new Promise(r => setTimeout(r, 0)); // yield for incoming ACKs
+      }
     }
 
     if (abortAll) break;
@@ -3094,9 +3113,13 @@ function startReceiver() {
     });
 
     // Per-file state
-    let currentMeta   = null;
-    let currentChunks = [];
-    let bytesReceived = 0;
+    let currentMeta    = null;
+    let currentChunks  = [];
+    let bytesReceived  = 0;
+    // Speed tracking on receiver side
+    let _recvT0        = 0;
+    let _recvLastBytes = 0;
+    let _recvLastTime  = 0;
 
     conn.on('data', msg => {
 
@@ -3106,9 +3129,12 @@ function startReceiver() {
         setConn('connected', `${msg.files.length} file${msg.files.length!==1?'s':''} ready — choose what to download`);
 
       } else if (msg?.type === 'meta') {
-        currentMeta   = msg;
-        currentChunks = [];
-        bytesReceived = 0;
+        currentMeta    = msg;
+        currentChunks  = [];
+        bytesReceived  = 0;
+        _recvT0        = Date.now();
+        _recvLastBytes = 0;
+        _recvLastTime  = Date.now();
 
         const n = msg.totalFiles;
         recvProgressLbl.textContent = n > 1 ? `Receiving file ${msg.fileIndex+1} of ${n}…` : 'Receiving…';
@@ -3133,11 +3159,31 @@ function startReceiver() {
         const pct = Math.round(bytesReceived / currentMeta.size * 100);
         setProgress(recvFill, recvStats, pct);
         updateRecvSize(bytesReceived, currentMeta.size);
-        incomingMeta.textContent = `${formatBytes(bytesReceived)} of ${formatBytes(currentMeta.size)}`;
 
-        // Send real-time progress to sender every 10 chunks so their bar tracks actual delivery
+        // Update speed + time remaining every 10 chunks
         if (currentChunks.length % 10 === 0) {
+          const now        = Date.now();
+          const deltaSecs  = Math.max((now - _recvLastTime) / 1000, 0.1);
+          const speed      = (bytesReceived - _recvLastBytes) / deltaSecs;
+          _recvLastBytes   = bytesReceived;
+          _recvLastTime    = now;
+
+          const speedFmt = speed > 1048576
+            ? `${(speed/1048576).toFixed(1)} MB/s`
+            : `${(speed/1024).toFixed(0)} KB/s`;
+          const remSecs  = speed > 0 ? (currentMeta.size - bytesReceived) / speed : 0;
+          const remStr   = remSecs > 60
+            ? `${Math.floor(remSecs/60)}m ${Math.floor(remSecs%60)}s left`
+            : remSecs > 1 ? `${Math.ceil(remSecs)}s left` : '';
+
+          incomingMeta.textContent = remStr
+            ? `${formatBytes(bytesReceived)} of ${formatBytes(currentMeta.size)} · ${speedFmt} · ${remStr}`
+            : `${formatBytes(bytesReceived)} of ${formatBytes(currentMeta.size)} · ${speedFmt}`;
+
+          // Send ACK to sender so their bar also tracks delivery progress
           conn.send({ type: 'recv-progress', bytesReceived, totalSize: currentMeta.size });
+        } else {
+          incomingMeta.textContent = `${formatBytes(bytesReceived)} of ${formatBytes(currentMeta.size)}`;
         }
 
         if (currentChunks.length === currentMeta.totalChunks) {
