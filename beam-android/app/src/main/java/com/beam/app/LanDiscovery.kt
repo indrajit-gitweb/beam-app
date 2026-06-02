@@ -10,6 +10,7 @@ class LanDiscovery(private val context: Context) {
 
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private var discoveryListener: NsdManager.DiscoveryListener? = null
+    private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveredServerUrl: String = ""
 
     companion object {
@@ -68,11 +69,46 @@ class LanDiscovery(private val context: Context) {
         }
     }
 
+    fun registerService(port: Int, name: String) {
+        val serviceInfo = android.net.nsd.NsdServiceInfo().apply {
+            serviceName = name
+            serviceType = SERVICE_TYPE
+            this.port   = port
+        }
+        registrationListener = object : NsdManager.RegistrationListener {
+            override fun onServiceRegistered(info: android.net.nsd.NsdServiceInfo) {
+                Log.d(TAG, "NSD: registered as ${info.serviceName}")
+            }
+            override fun onRegistrationFailed(info: android.net.nsd.NsdServiceInfo, errorCode: Int) {
+                Log.w(TAG, "NSD: registration failed: $errorCode")
+            }
+            override fun onServiceUnregistered(info: android.net.nsd.NsdServiceInfo) {
+                Log.d(TAG, "NSD: unregistered")
+            }
+            override fun onUnregistrationFailed(info: android.net.nsd.NsdServiceInfo, errorCode: Int) {
+                Log.w(TAG, "NSD: unregistration failed: $errorCode")
+            }
+        }
+        try {
+            nsdManager.registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, registrationListener!!)
+        } catch (e: Exception) {
+            Log.e(TAG, "NSD registration error", e)
+        }
+    }
+
+    fun unregisterService() {
+        registrationListener?.let {
+            try { nsdManager.unregisterService(it) } catch (e: Exception) {}
+        }
+        registrationListener = null
+    }
+
     fun stopDiscovery() {
         discoveryListener?.let {
             try { nsdManager.stopServiceDiscovery(it) } catch (e: Exception) { /* ignore */ }
         }
         discoveryListener = null
+        unregisterService()
     }
 
     fun getServerUrl(): String = discoveredServerUrl

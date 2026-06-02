@@ -1083,6 +1083,25 @@
           <div class="offline-device-list">
             <div class="offline-device-list-title">Nearby devices</div>
             <div id="offline-device-items"></div>
+
+            <!-- OR: QR code for browser-only access -->
+            <div id="offline-qr-section" style="display:none;margin-top:16px;">
+              <div style="display:flex;align-items:center;gap:10px;margin:12px 0 10px;color:var(--muted);font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;">
+                <div style="flex:1;height:1px;background:var(--border)"></div>
+                OR — no Beam app?
+                <div style="flex:1;height:1px;background:var(--border)"></div>
+              </div>
+              <div class="offline-android-box">
+                <div class="offline-android-title">📱 Scan to join from any browser</div>
+                <div class="offline-android-inner">
+                  <div class="offline-qr-wrap" id="offline-device-qr"></div>
+                  <div class="offline-android-info">
+                    <div class="offline-android-url" id="offline-device-url">—</div>
+                    <div class="offline-android-hint">Open this URL on any device — Mac, iPhone, Windows, Linux — no app install needed. Works in Safari, Chrome, any browser.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -4178,6 +4197,28 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
           const deviceList = ws ? peers : FAKE_DEVICES;
           renderDeviceList(deviceList);
 
+          // Show QR code if Android is running its own server
+          if (IS_ANDROID_NATIVE && window.BeamNative?.isRunningServer?.()) {
+            const serverUrl = window.BeamNative.getLocalServerUrl();
+            if (serverUrl) {
+              const qrSection = document.getElementById('offline-qr-section');
+              const urlEl     = document.getElementById('offline-device-url');
+              const qrEl      = document.getElementById('offline-device-qr');
+              if (qrSection && urlEl && qrEl) {
+                urlEl.textContent = serverUrl;
+                qrEl.innerHTML    = '';
+                qrSection.style.display = 'block';
+                const tryQR = () => {
+                  if (typeof QRCode !== 'undefined') {
+                    new QRCode(qrEl, { text: serverUrl, width: 68, height: 68,
+                      colorDark: '#000', colorLight: '#fff', correctLevel: QRCode.CorrectLevel.M });
+                  } else { setTimeout(tryQR, 200); }
+                };
+                tryQR();
+              }
+            }
+          }
+
           if (ws && deviceList.length === 0) {
             // Connected to LAN server but no other peers yet — show message inside device step
             showOfflineStep('devices');
@@ -4379,7 +4420,31 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
           document.getElementById('offline-scanning-title').textContent = 'Searching for nearby devices…';
           document.getElementById('offline-scan-note').textContent = 'Make sure the other device has Beam open';
           showOfflineStep('scanning');
-          setTimeout(() => { renderDeviceList(peers); showOfflineStep('devices'); }, 1500);
+          setTimeout(() => {
+            renderDeviceList(peers);
+            showOfflineStep('devices');
+            // Show QR code if Android is running its own server
+            if (IS_ANDROID_NATIVE && window.BeamNative?.isRunningServer?.()) {
+              const serverUrl = window.BeamNative.getLocalServerUrl();
+              if (serverUrl) {
+                const qrSection = document.getElementById('offline-qr-section');
+                const urlEl     = document.getElementById('offline-device-url');
+                const qrEl      = document.getElementById('offline-device-qr');
+                if (qrSection && urlEl && qrEl) {
+                  urlEl.textContent = serverUrl;
+                  qrEl.innerHTML    = '';
+                  qrSection.style.display = 'block';
+                  const tryQRManual = () => {
+                    if (typeof QRCode !== 'undefined') {
+                      new QRCode(qrEl, { text: serverUrl, width: 68, height: 68,
+                        colorDark: '#000', colorLight: '#fff', correctLevel: QRCode.CorrectLevel.M });
+                    } else { setTimeout(tryQRManual, 200); }
+                  };
+                  tryQRManual();
+                }
+              }
+            }
+          }, 1500);
         }, 2000);
         resolve(ws);
       };

@@ -27,6 +27,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loadingView: LinearLayout
     private lateinit var lanDiscovery: LanDiscovery
     private lateinit var beamWebInterface: BeamWebInterface
+    private var beamLanServer: BeamLanServer? = null
 
     // ── File chooser callback — set when WebView requests a file picker ──────
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
@@ -114,8 +115,8 @@ class MainActivity : AppCompatActivity() {
         loadingView = findViewById(R.id.loadingView)
 
         requestNotificationPermission()
-        setupWebView()
         startLanDiscovery()
+        setupWebView()
         registerReceivers()
     }
 
@@ -130,6 +131,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupWebView() {
         beamWebInterface = BeamWebInterface(this)
+        startLanServer()
 
         with(webView.settings) {
             javaScriptEnabled               = true
@@ -181,6 +183,25 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl("file:///android_asset/index.html")
     }
 
+    private fun startLanServer() {
+        try {
+            val name   = android.os.Build.MODEL
+            val server = BeamLanServer(this, name)
+            server.start()
+            beamWebInterface.setLanServer(server)
+            // Announce via NSD so other Beam devices auto-discover this phone
+            lanDiscovery.registerService(BeamLanServer.PORT, name)
+            beamLanServer = server
+            Log.d("MainActivity", "LAN server started: ${server.getServerUrl()}")
+            // Inject server URL into WebView once page loads
+            webView.evaluateJavascript(
+                "window.__BEAM_LOCAL_SERVER_URL__ = '${server.getServerUrl()}';", null
+            )
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to start LAN server", e)
+        }
+    }
+
     private fun startLanDiscovery() {
         lanDiscovery = LanDiscovery(this)
         lanDiscovery.startDiscovery()
@@ -202,6 +223,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        beamLanServer?.stop()
+        beamLanServer = null
         super.onDestroy()
         unregisterReceiver(transferReceiver)
         lanDiscovery.stopDiscovery()

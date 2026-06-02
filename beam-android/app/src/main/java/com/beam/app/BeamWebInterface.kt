@@ -8,8 +8,10 @@ import android.webkit.JavascriptInterface
 class BeamWebInterface(private val context: Context) {
 
     @Volatile private var lanServerUrl: String = ""
+    private var beamLanServer: BeamLanServer? = null
 
     fun setLanServerUrl(url: String) { lanServerUrl = url }
+    fun setLanServer(server: BeamLanServer?) { beamLanServer = server }
 
     @JavascriptInterface
     fun isNativeApp(): Boolean = true
@@ -24,7 +26,19 @@ class BeamWebInterface(private val context: Context) {
     fun getDeviceType(): String = "phone"
 
     @JavascriptInterface
-    fun getLanServerUrl(): String = lanServerUrl
+    fun getLanServerUrl(): String {
+        // Prefer own server if running — connect via localhost
+        if (beamLanServer?.isAlive == true) return "http://localhost:${BeamLanServer.PORT}"
+        return lanServerUrl
+    }
+
+    /** Returns the URL of the LAN server this device is running (as the hub). */
+    @JavascriptInterface
+    fun getLocalServerUrl(): String = beamLanServer?.getServerUrl() ?: ""
+
+    /** True when this Android device is running its own LAN server. */
+    @JavascriptInterface
+    fun isRunningServer(): Boolean = beamLanServer?.isAlive == true
 
     // Called when user taps Accept on an incoming transfer
     // downloadUrl: the /download/:id path on the LAN server

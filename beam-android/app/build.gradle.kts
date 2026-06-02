@@ -40,6 +40,10 @@ dependencies {
     implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
 
+    // LAN server — HTTP + WebSocket on Android without heavy frameworks
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
+    implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
+
     // HTTP client for transfers
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
