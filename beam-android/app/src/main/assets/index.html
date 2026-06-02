@@ -630,6 +630,21 @@
     .tg-reason { font-size: .73rem; color: var(--muted-2); margin-bottom: 5px; line-height: 1.5; }
     .tg-fix { font-size: .72rem; color: var(--muted); line-height: 1.6; background: rgba(0,0,0,.2); border-radius: 6px; padding: 7px 10px; margin-top: 5px; font-family: monospace; }
 
+    /* No device found state */
+    .offline-notfound-wrap { text-align: center; padding: 18px 0 10px; }
+    .offline-notfound-icon { font-size: 2rem; margin-bottom: 10px; }
+    .offline-notfound-title { font-size: .92rem; font-weight: 700; color: var(--warn); margin-bottom: 8px; }
+    .offline-notfound-msg { font-size: .76rem; color: var(--muted-2); line-height: 1.6; margin-bottom: 16px; }
+    .offline-notfound-hint { font-size: .72rem; color: var(--muted); background: rgba(0,0,0,.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; text-align: left; line-height: 1.6; }
+    .offline-retry-scan-btn { background: rgba(16,185,129,.1); border: 1px solid rgba(16,185,129,.3); color: #34d399; border-radius: 8px; padding: 10px 24px; font-size: .85rem; font-weight: 700; cursor: pointer; transition: background .15s; }
+    .offline-retry-scan-btn:hover { background: rgba(16,185,129,.2); }
+    /* Manual IP input */
+    .offline-manual-ip-wrap { margin-top: 14px; }
+    .offline-manual-ip-label { font-size: .72rem; color: var(--muted); margin-bottom: 6px; }
+    .offline-manual-ip-row { display: flex; gap: 8px; }
+    #offline-manual-ip { flex: 1; padding: 10px 12px; border-radius: var(--radius-sm); border: 1.5px solid var(--border-2); background: var(--surface-2); color: var(--text); font-size: .82rem; outline: none; }
+    #offline-manual-ip:focus { border-color: #10b981; }
+    .offline-manual-connect-btn { padding: 10px 16px; border-radius: var(--radius-sm); border: 1px solid rgba(16,185,129,.3); background: rgba(16,185,129,.1); color: #34d399; font-size: .82rem; font-weight: 700; cursor: pointer; white-space: nowrap; }
     /* Android connect panel — persistent strip at bottom of offline section */
     .offline-android-box { margin-top: 16px; border: 1px solid rgba(16,185,129,.2); border-radius: var(--radius-sm); padding: 14px 16px; background: rgba(16,185,129,.04); border-top: 2px solid rgba(16,185,129,.15); }
     .offline-android-title { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: #34d399; margin-bottom: 10px; }
@@ -1029,6 +1044,27 @@
               <div class="offline-chosen-mode-line" id="offline-chosen-mode-line">—</div>
               <div class="offline-chosen-why" id="offline-chosen-why">—</div>
               <div class="offline-chosen-fallback" id="offline-chosen-fallback"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step: no device / LAN server found (timeout state) -->
+        <div id="offline-step-notfound" style="display:none">
+          <div class="offline-notfound-wrap">
+            <div class="offline-notfound-icon">📡</div>
+            <div class="offline-notfound-title" id="offline-notfound-title">No Beam device found</div>
+            <div class="offline-notfound-msg" id="offline-notfound-msg">Couldn't find a Beam desktop app on this WiFi network.</div>
+            <div class="offline-notfound-hint" id="offline-notfound-hint">
+              Make sure the <strong>Beam desktop app</strong> is open on a Mac, Windows, or Linux device on the same WiFi network, then try again.
+            </div>
+            <button class="offline-retry-scan-btn" onclick="resetOfflineMode()">🔄 Try again</button>
+            <!-- Manual IP fallback -->
+            <div class="offline-manual-ip-wrap">
+              <div class="offline-manual-ip-label">Or enter the desktop app IP manually:</div>
+              <div class="offline-manual-ip-row">
+                <input type="text" id="offline-manual-ip" placeholder="192.168.x.x" inputmode="decimal" />
+                <button class="offline-manual-connect-btn" onclick="connectManualIp()">Connect</button>
+              </div>
             </div>
           </div>
         </div>
@@ -3291,7 +3327,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   const offlineSection     = document.getElementById('offline-section');
   const offlineRecvSection = document.getElementById('offline-recv-section');
 
-  const steps = ['conn','scanning','devices','waiting','transfer','success','fail'];
+  const steps = ['conn','notfound','scanning','devices','waiting','transfer','success','fail'];
   function showOfflineStep(name) {
     steps.forEach(s => {
       const el = document.getElementById(`offline-step-${s}`);
@@ -4030,19 +4066,41 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 
     offlineConnType = 'wifi';
 
-    // On Android, NSD discovery runs in the background. If getLanServerUrl()
-    // returns empty (not yet discovered), register a one-shot onLanServerFound
-    // listener that re-runs autoDetectConnection when the Mac is found.
+    // On Android, NSD discovery runs in the background.
+    // If URL not yet known — show searching state and set a 20s timeout.
     if (IS_ANDROID_NATIVE && window.BeamNative) {
       const existingUrl = window.BeamNative.getLanServerUrl();
       if (!existingUrl) {
         document.getElementById('offline-detect-title').textContent =
-          'Looking for Beam on your network…';
+          'Searching for Beam on your WiFi…';
         document.getElementById('offline-detect-sub').textContent =
-          'Make sure the Beam desktop app is open on the same WiFi';
-        // onLanServerFound is called by MainActivity when NSD resolves
+          'Make sure the Beam desktop app is open on the same network';
+
         window._pendingOfflineDetect = true;
-        return; // Will be re-triggered by onLanServerFound
+
+        // Timeout — if NSD doesn't find anything in 20s, show not-found screen
+        if (window._offlineDiscoveryTimer) clearTimeout(window._offlineDiscoveryTimer);
+        window._offlineDiscoveryTimer = setTimeout(() => {
+          if (window._pendingOfflineDetect) {
+            window._pendingOfflineDetect = false;
+            document.getElementById('offline-detect-ring').style.display = 'none';
+            showOfflineStep('notfound');
+            document.getElementById('offline-notfound-title').textContent = 'No Beam device found';
+            document.getElementById('offline-notfound-msg').textContent =
+              'Searched for 20 seconds but couldn\'t find a Beam desktop app on this WiFi.';
+            document.getElementById('offline-notfound-hint').innerHTML =
+              '• Open the <strong>Beam desktop app</strong> on Mac, Windows, or Linux<br>' +
+              '• Make sure it\'s on the <strong>same WiFi</strong> as this phone<br>' +
+              '• Or enter the IP address shown in the desktop app below';
+          }
+        }, 20000);
+
+        return; // Will be re-triggered by onLanServerFound or user retries
+      }
+      // URL known — clear any pending timer
+      if (window._offlineDiscoveryTimer) {
+        clearTimeout(window._offlineDiscoveryTimer);
+        window._offlineDiscoveryTimer = null;
       }
     }
 
@@ -4117,8 +4175,29 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         showOfflineStep('scanning');
 
         setTimeout(() => {
-          renderDeviceList(ws ? peers : FAKE_DEVICES);
-          showOfflineStep('devices');
+          const deviceList = ws ? peers : FAKE_DEVICES;
+          renderDeviceList(deviceList);
+
+          if (ws && deviceList.length === 0) {
+            // Connected to LAN server but no other peers yet — show message inside device step
+            showOfflineStep('devices');
+            // After 15s still empty → suggest opening Beam on other device
+            setTimeout(() => {
+              const items = document.getElementById('offline-device-items');
+              if (items && items.innerHTML.includes('No devices')) {
+                items.innerHTML = `
+                  <div style="text-align:center;padding:20px;color:var(--muted);font-size:.78rem;line-height:1.6">
+                    <div style="font-size:1.4rem;margin-bottom:8px">📱</div>
+                    <strong style="color:var(--muted-2)">No devices joined yet</strong><br>
+                    On the other device, open Beam and select <strong>Offline</strong> mode to appear here.
+                    <br><br>
+                    <button class="offline-retry-scan-btn" onclick="resetOfflineMode()" style="font-size:.75rem;padding:7px 16px">Scan again</button>
+                  </div>`;
+              }
+            }, 15000);
+          } else {
+            showOfflineStep('devices');
+          }
         }, ws ? 1000 : 2200);
       }, 2800);
     }, 1500);
@@ -4246,9 +4325,11 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   window.resetOfflineMode = function() {
     if (transferTimer)  { clearInterval(transferTimer);  transferTimer  = null; }
     if (window._offlineWaitTimer) { clearTimeout(window._offlineWaitTimer); window._offlineWaitTimer = null; }
+    if (window._offlineDiscoveryTimer) { clearTimeout(window._offlineDiscoveryTimer); window._offlineDiscoveryTimer = null; }
     if (rtcConn)   { rtcConn.close();   rtcConn   = null; }
     dataChannel   = null;
     selectedDevice = null;
+    window._pendingOfflineDetect = false;
     const fillEl  = document.getElementById('offline-progress-fill');
     const pctEl   = document.getElementById('offline-progress-pct');
     const labelEl = document.getElementById('offline-progress-label');
@@ -4256,6 +4337,60 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     if (pctEl)   pctEl.textContent   = '0%';
     if (labelEl) labelEl.textContent = 'Sending…';
     autoDetectConnection();
+  };
+
+  // Manual IP connect — user types Mac IP directly
+  window.connectManualIp = async function() {
+    const input = document.getElementById('offline-manual-ip');
+    const ip    = (input?.value || '').trim();
+    if (!ip) return;
+
+    const wsUrl = `ws://${ip}:${LAN_PORT}`;
+    document.getElementById('offline-notfound-title').textContent = `Connecting to ${ip}…`;
+
+    return new Promise((resolve) => {
+      const ws = new WebSocket(wsUrl);
+      const timeout = setTimeout(() => { ws.close(); resolve(null); }, 5000);
+
+      ws.onopen = async () => {
+        clearTimeout(timeout);
+        // Register as peer
+        const myIdLocal   = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+        const myNameLocal = IS_ANDROID_NATIVE
+          ? (window.BeamNative?.getDeviceName?.() || navigator.platform || 'Mobile')
+          : (navigator.platform || 'Browser');
+        ws.send(JSON.stringify({ type: 'register', id: myIdLocal, name: myNameLocal, deviceType: 'phone' }));
+        lanWs = ws;
+        setupLanMessageHandler(ws);
+
+        // Update chosen result and proceed
+        document.getElementById('offline-detect-ring').style.display = 'none';
+        document.getElementById('offline-chosen-mode-line').innerHTML =
+          `<svg class="icon" width="14" height="14"><use href="#ico-wifi"/></svg> WiFi — Connected to ${ip}`;
+        document.getElementById('offline-chosen-why').textContent =
+          `Manually connected to ${ip}:${LAN_PORT}. Files transfer directly over WiFi.`;
+        document.getElementById('offline-chosen-fallback').textContent = '';
+        document.getElementById('offline-chosen-result').style.display = 'block';
+        showOfflineStep('conn');
+
+        setTimeout(() => {
+          document.getElementById('offline-scanning-title').textContent = 'Searching for nearby devices…';
+          document.getElementById('offline-scan-note').textContent = 'Make sure the other device has Beam open';
+          showOfflineStep('scanning');
+          setTimeout(() => { renderDeviceList(peers); showOfflineStep('devices'); }, 1500);
+        }, 2000);
+        resolve(ws);
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timeout);
+        document.getElementById('offline-notfound-title').textContent = 'Could not connect';
+        document.getElementById('offline-notfound-msg').textContent = `Could not reach Beam at ${ip}:${LAN_PORT}. Check the IP and try again.`;
+        resolve(null);
+      };
+    });
   };
 
   // ── Receive tab ───────────────────────────────────────────────────────────
