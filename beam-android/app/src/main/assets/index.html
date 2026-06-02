@@ -3456,7 +3456,9 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         myPeerId   = uuid();
         myPeerName = IS_ELECTRON
           ? (await window.electronAPI.getDeviceName())
-          : (navigator.platform || 'Browser Device');
+          : IS_ANDROID_NATIVE && window.BeamNative?.getDeviceName
+            ? window.BeamNative.getDeviceName()          // real Android model name
+            : (navigator.platform || 'Browser Device');
 
         const deviceType = IS_ELECTRON
           ? (await window.electronAPI.getDeviceType())
@@ -4898,6 +4900,12 @@ window.dismissRetrySection = function() {
   let wsUrl = null;
 
   if (window.BeamNative || window.__BEAM_NATIVE_ANDROID__) {
+    // If Android IS the server, do NOT create a background connection to its own
+    // server here. That would register a second peer (different ID, navigator.platform
+    // as name = "Linux armv8l") which then appears as a fake device in the list.
+    // initOfflineMode handles the connection when the user activates Offline mode.
+    if (window.BeamNative?.isRunningServer?.()) return;
+
     // Android native app — get discovered URL from LanDiscovery.kt
     const httpUrl = window.BeamNative?.getLanServerUrl?.() || '';
     if (httpUrl) {
