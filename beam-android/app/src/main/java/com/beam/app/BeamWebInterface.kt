@@ -101,4 +101,17 @@ class BeamWebInterface(private val context: Context) {
     fun showNotification(title: String, body: String) {
         BeamNotificationHelper.showSimple(context, title, body)
     }
+
+    /**
+     * Opens the ZXing QR code scanner.
+     * When a QR code is scanned, MainActivity calls
+     * window.connectFromQrCode(url) with the scanned URL.
+     * Call from JavaScript: BeamNative.scanQrCode()
+     */
+    @JavascriptInterface
+    fun scanQrCode() {
+        if (context is MainActivity) {
+            (context as MainActivity).launchQrScanner()
+        }
+    }
 }

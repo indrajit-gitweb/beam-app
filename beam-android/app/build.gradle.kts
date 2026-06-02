@@ -44,6 +44,9 @@ dependencies {
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
 
+    // QR code scanner (ZXing embedded — no Play Services needed)
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+
     // HTTP client for transfers
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
