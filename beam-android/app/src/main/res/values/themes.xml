@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.Beam" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">#06060f</item>
+        <item name="android:navigationBarColor">#06060f</item>
+    </style>
+</resources>

@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Beam</string>
+    <string name="channel_id">beam_transfer</string>
+    <string name="channel_name">File Transfers</string>
+    <string name="channel_desc">Shows progress for Beam file transfers</string>
+    <string name="notification_sending">Sending file…</string>
+    <string name="notification_receiving">Receiving file…</string>
+    <string name="notification_complete">Transfer complete</string>
+    <string name="notification_failed">Transfer failed</string>
+</resources>
