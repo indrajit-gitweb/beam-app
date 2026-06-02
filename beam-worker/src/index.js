@@ -12,19 +12,49 @@
  *                           to client, deletes from Filebin + KV.
  *   GET  /health            liveness check.
  *
- * Scheduled (cron "* * * * *"):
- *   Scans KV for expired entries, deletes Filebin files, purges KV.
+ * Cleanup strategy: lazy (no cron). Runs after each /register or /download.
  *
  * Bindings:
  *   BEAM_EXPIRY          KV namespace  (no R2, no credit card needed)
- *   BEAM_ALLOWED_ORIGIN  CORS origin secret
+ *   BEAM_ALLOWED_ORIGIN  Comma-separated list of allowed CORS origins.
+ *                        Examples:
+ *                          https://indrajit-gitweb.github.io
+ *                          https://indrajit-gitweb.github.io,http://localhost:3131,null
+ *                        Set via: npx wrangler secret put BEAM_ALLOWED_ORIGIN
  */
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 
-function corsHeaders(origin) {
+/**
+ * Resolve the allowed origin for a request.
+ *
+ * BEAM_ALLOWED_ORIGIN can be a comma-separated list of origins, e.g.:
+ *   "https://indrajit-gitweb.github.io,http://localhost:3131,null"
+ *
+ * "null" covers Electron (file:// loads send Origin: null).
+ *
+ * If the incoming origin is in the list → reflect it (tightest CORS policy).
+ * If the list is "*" → allow everything (open — avoid for production).
+ * If no match → fall back to the first listed origin (browser will block
+ * the request, which is the intended behaviour).
+ */
+function resolveOrigin(requestOrigin, allowedEnv) {
+  const allowed = (allowedEnv || '').trim();
+  if (!allowed || allowed === '*') return '*';
+
+  const list = allowed.split(',').map(o => o.trim()).filter(Boolean);
+
+  // Electron / WebView sends "null" as a string for file:// origins
+  const incoming = requestOrigin || 'null';
+  if (list.includes(incoming)) return incoming;
+
+  // Default to first allowed origin (browser will block non-matching origins)
+  return list[0];
+}
+
+function corsHeaders(resolvedOrigin) {
   return {
-    'Access-Control-Allow-Origin':  origin || '*',
+    'Access-Control-Allow-Origin':  resolvedOrigin,
     'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age':       '86400',
@@ -228,8 +258,9 @@ async function handleScheduled(env) {
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 async function handleRequest(request, env, ctx) {
-  const origin = env.BEAM_ALLOWED_ORIGIN || '*';
-  const url    = new URL(request.url);
+  const requestOrigin = request.headers.get('Origin') || '';
+  const origin        = resolveOrigin(requestOrigin, env.BEAM_ALLOWED_ORIGIN);
+  const url           = new URL(request.url);
 
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders(origin) });
