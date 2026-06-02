@@ -41,8 +41,8 @@ jobs:
         with:
           name: Beam-Desktop-Mac
           path: |
-            beam-electron/dist/*.dmg
-            beam-electron/dist/*-mac.zip
+            beam-electron/dist/*-universal.dmg
+            beam-electron/dist/*-universal-mac.zip
           retention-days: 30
 
   build-linux:
