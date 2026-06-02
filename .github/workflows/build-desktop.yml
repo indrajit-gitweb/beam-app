@@ -13,83 +13,82 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false   # keep building other platforms if one fails
-      matrix:
-        include:
-          - os: macos-latest
-            platform: Mac
-            build_cmd: npm run build:mac
-            artifact_name: Beam-Desktop-Mac
-
-          - os: ubuntu-latest
-            platform: Linux
-            build_cmd: npm run build:linux
-            artifact_name: Beam-Desktop-Linux
-
-          - os: windows-latest
-            platform: Windows
-            build_cmd: npm run build:win
-            artifact_name: Beam-Desktop-Windows
-
-    runs-on: ${{ matrix.os }}
-    name: Build ${{ matrix.platform }}
-
+  build-mac:
+    name: Build Mac
+    runs-on: macos-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: beam-electron/package-lock.json
 
-      # macOS DMG tool requires the 'python' command (not 'python3')
-      - name: Ensure python symlink (macOS only)
-        if: matrix.os == 'macos-latest'
+      - name: Ensure python command (DMG tool needs it)
         run: command -v python || ln -sf $(which python3) /usr/local/bin/python
 
       - name: Install dependencies
         working-directory: beam-electron
-        run: npm install
+        run: npm install --no-audit --no-fund
 
-      - name: Build ${{ matrix.platform }} packages
+      - name: Build Mac packages
         working-directory: beam-electron
-        run: ${{ matrix.build_cmd }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build:mac
 
-      - name: List built packages
-        working-directory: beam-electron
-        run: |
-          echo "=== Built packages ==="
-          ls -lh dist/ | grep -v "blockmap\|unpacked\|builder-debug\|^d"
-
-      - name: Upload Mac packages
-        if: matrix.os == 'macos-latest'
+      - name: Upload Mac artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: Beam-Desktop-Mac
           path: |
             beam-electron/dist/*.dmg
             beam-electron/dist/*-mac.zip
           retention-days: 30
 
-      - name: Upload Linux packages
-        if: matrix.os == 'ubuntu-latest'
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: beam-electron
+        run: npm install --no-audit --no-fund
+
+      - name: Build Linux packages
+        working-directory: beam-electron
+        run: npm run build:linux
+
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: Beam-Desktop-Linux
           path: beam-electron/dist/*.AppImage
           retention-days: 30
 
-      - name: Upload Windows packages
-        if: matrix.os == 'windows-latest'
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: beam-electron
+        run: npm install --no-audit --no-fund
+
+      - name: Build Windows packages
+        working-directory: beam-electron
+        run: npm run build:win
+
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: Beam-Desktop-Windows
           path: beam-electron/dist/*.exe
           retention-days: 30
