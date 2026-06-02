@@ -288,13 +288,18 @@
     /* ── Receive tab ── */
     .rx-label { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin-bottom: 10px; }
     .code-input-row { display: flex; gap: 8px; align-items: stretch; }
-    #code-input { flex: 1; padding: 14px 16px; border-radius: var(--radius-sm); border: 1.5px solid var(--border-2); background: var(--surface-2); color: var(--text); font-family: 'SF Mono','Fira Code',monospace; font-size: 1.4rem; text-align: center; letter-spacing: .24em; outline: none; transition: border-color .2s, box-shadow .2s; }
+    #code-input { flex: 1; padding: 14px 16px; border-radius: var(--radius-sm); border: 1.5px solid var(--border-2); background: var(--surface-2); color: var(--text); font-family: 'SF Mono','Fira Code',monospace; font-size: 1.4rem; text-align: center; letter-spacing: .24em; outline: none; transition: border-color .2s, box-shadow .2s; min-width: 0; }
     #code-input::placeholder { color: var(--muted); letter-spacing: .15em; font-size: 1.1rem; }
     #code-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
     #receive-btn { padding: 14px 22px; border-radius: var(--radius-sm); border: none; background: linear-gradient(135deg,var(--accent),#7c3aed); color: #fff; font-size: .9rem; font-weight: 700; cursor: pointer; transition: opacity .15s, transform .12s, box-shadow .15s; white-space: nowrap; box-shadow: 0 4px 16px rgba(99,102,241,.35); }
     #receive-btn:hover  { opacity: .9; box-shadow: 0 6px 22px rgba(99,102,241,.5); transform: translateY(-1px); }
     #receive-btn:active { transform: scale(.97) translateY(0); }
     #receive-btn:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
+    /* On narrow screens (mobile / Android app) stack input + button vertically */
+    @media (max-width: 480px) {
+      .code-input-row { flex-direction: column; }
+      #receive-btn { width: 100%; padding: 15px; font-size: 1rem; }
+    }
 
     /* ── Connection status bar ── */
     #conn-status { display: none; margin-top: 14px; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--border); }
