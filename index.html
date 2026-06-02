@@ -5535,45 +5535,37 @@ window.dismissRetrySection = function() {
 
 })();
 
-/* ── Apply Offline mode unavailable state for web browser users ──────────────
-   Runs independently of initOfflineMode to avoid any IIFE error dependency.
-   Uses a MutationObserver on the mode-selector so it fires the moment files
-   are queued and the selector becomes visible.                               */
-(function applyOfflineBrowserRestriction() {
-  const isApp = !!(window.electronAPI || window.BeamNative || window.__BEAM_NATIVE_ANDROID__);
+
+</script>
+
+<!-- Offline mode browser restriction — separate non-module script so it
+     runs independently of any module execution errors -->
+<script>
+(function() {
+  var isApp = !!(window.electronAPI || window.BeamNative || window.__BEAM_NATIVE_ANDROID__);
   if (isApp) return;
 
-  // Mark body so CSS can apply styles without timing issues
-  document.body.setAttribute('data-beam-browser', 'true');
-
-  function markUnavailable() {
-    const card = document.getElementById('mode-offline');
-    if (!card) return;
-    card.classList.add('unavailable');
-    card.setAttribute('aria-disabled', 'true');
-    const tag = document.getElementById('offline-app-tag');
-    if (tag) tag.style.display = 'inline-flex';
-    const warn = document.getElementById('hiw-offline-browser-warning');
+  function apply() {
+    var card = document.getElementById('mode-offline');
+    if (card) {
+      card.classList.add('unavailable');
+      card.setAttribute('aria-disabled', 'true');
+    }
+    var tag  = document.getElementById('offline-app-tag');
+    if (tag)  tag.style.display = 'inline-flex';
+    var warn = document.getElementById('hiw-offline-browser-warning');
     if (warn) warn.style.display = 'block';
   }
 
-  markUnavailable();
+  // Apply now + watch mode-selector visibility
+  apply();
+  var ms = document.getElementById('mode-selector');
+  if (ms) new MutationObserver(apply).observe(ms, { attributes: true, attributeFilter: ['style'] });
 
-  // Re-apply whenever mode selector becomes visible (files queued)
-  const selector = document.getElementById('mode-selector');
-  if (selector) {
-    new MutationObserver(() => markUnavailable())
-      .observe(selector, { attributes: true, attributeFilter: ['style'] });
-  }
-
-  // Belt-and-suspenders: periodic check for 10s
-  let attempts = 0;
-  const iv = setInterval(() => {
-    markUnavailable();
-    if (++attempts >= 20) clearInterval(iv);
-  }, 500);
+  // Retry every 500ms for 10s to survive any race conditions
+  var n = 0;
+  var iv = setInterval(function() { apply(); if (++n >= 20) clearInterval(iv); }, 500);
 })();
-
 </script>
 </body>
 </html>
