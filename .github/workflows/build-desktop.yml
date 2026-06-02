@@ -11,6 +11,8 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Prevent electron-builder from trying to auto-publish to GitHub Releases
+  EP_DRAFT: false
 
 jobs:
   build-mac:
@@ -32,7 +34,7 @@ jobs:
 
       - name: Build Mac packages
         working-directory: beam-electron
-        run: npm run build:mac
+        run: npx electron-builder --mac --publish never
 
       - name: Upload Mac artifacts
         uses: actions/upload-artifact@v4
@@ -59,7 +61,7 @@ jobs:
 
       - name: Build Linux packages
         working-directory: beam-electron
-        run: npm run build:linux
+        run: npx electron-builder --linux --publish never
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
@@ -84,7 +86,7 @@ jobs:
 
       - name: Build Windows packages
         working-directory: beam-electron
-        run: npm run build:win
+        run: npx electron-builder --win --publish never
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
