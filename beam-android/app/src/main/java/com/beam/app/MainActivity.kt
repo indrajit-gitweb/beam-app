@@ -6,9 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -26,14 +28,28 @@ class MainActivity : AppCompatActivity() {
     private lateinit var lanDiscovery: LanDiscovery
     private lateinit var beamWebInterface: BeamWebInterface
 
-    // Listen for transfer completion from the Foreground Service
+    // ── File chooser callback — set when WebView requests a file picker ──────
+    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+
+    // Launches the system file picker and returns result to WebView
+    private val filePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        fileChooserCallback?.onReceiveValue(
+            WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+                ?: emptyArray()
+        )
+        fileChooserCallback = null
+    }
+
+    // ── Listen for transfer completion from the Foreground Service ───────────
     private val transferReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 BeamTransferService.ACTION_TRANSFER_COMPLETE -> {
-                    val filename = intent.getStringExtra("filename") ?: ""
+                    val filename  = intent.getStringExtra("filename")  ?: ""
                     val savedPath = intent.getStringExtra("savedPath") ?: ""
-                    val fromName = intent.getStringExtra("fromName") ?: ""
+                    val fromName  = intent.getStringExtra("fromName")  ?: ""
                     runOnUiThread {
                         webView.evaluateJavascript(
                             """
@@ -46,21 +62,21 @@ class MainActivity : AppCompatActivity() {
                                     );
                                 }
                                 if (typeof showPopup === 'function') {
-                                    showPopup('✅', 'File Received!', '${filename} saved to Downloads.', 'success', 6000);
+                                    showPopup('✅', 'File Received!',
+                                        '${filename} saved to Downloads.', 'success', 6000);
                                 }
                             })();
-                            """.trimIndent(),
-                            null
+                            """.trimIndent(), null
                         )
                     }
                 }
                 BeamTransferService.ACTION_TRANSFER_PROGRESS -> {
-                    val pct = intent.getIntExtra("pct", 0)
+                    val pct      = intent.getIntExtra("pct", 0)
                     val filename = intent.getStringExtra("filename") ?: ""
                     runOnUiThread {
                         webView.evaluateJavascript(
-                            "window.onNativeTransferProgress && window.onNativeTransferProgress($pct, '${filename}');",
-                            null
+                            "window.onNativeTransferProgress && " +
+                            "window.onNativeTransferProgress($pct, '${filename}');", null
                         )
                     }
                 }
@@ -68,8 +84,8 @@ class MainActivity : AppCompatActivity() {
                     val error = intent.getStringExtra("error") ?: "Unknown error"
                     runOnUiThread {
                         webView.evaluateJavascript(
-                            "window.onNativeTransferFailed && window.onNativeTransferFailed('${error}');",
-                            null
+                            "window.onNativeTransferFailed && " +
+                            "window.onNativeTransferFailed('${error}');", null
                         )
                     }
                 }
@@ -78,8 +94,7 @@ class MainActivity : AppCompatActivity() {
                     beamWebInterface.setLanServerUrl(url)
                     runOnUiThread {
                         webView.evaluateJavascript(
-                            "window.onLanServerFound && window.onLanServerFound('${url}');",
-                            null
+                            "window.onLanServerFound && window.onLanServerFound('${url}');", null
                         )
                     }
                 }
@@ -89,7 +104,7 @@ class MainActivity : AppCompatActivity() {
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* Permission result handled silently */ }
+    ) { /* handled silently */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -116,36 +131,53 @@ class MainActivity : AppCompatActivity() {
     private fun setupWebView() {
         beamWebInterface = BeamWebInterface(this)
 
-        val settings: WebSettings = webView.settings
-        settings.javaScriptEnabled          = true
-        settings.domStorageEnabled          = true
-        settings.allowFileAccess            = true
-        settings.allowContentAccess         = true
-        settings.mixedContentMode           = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-        settings.mediaPlaybackRequiresUserGesture = false
+        with(webView.settings) {
+            javaScriptEnabled               = true
+            domStorageEnabled               = true
+            allowFileAccess                 = true
+            allowContentAccess              = true
+            mixedContentMode                = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+            mediaPlaybackRequiresUserGesture = false
+        }
 
-        // Allow WebRTC
-        WebView.setWebContentsDebuggingEnabled(true) // remove in production
+        WebView.setWebContentsDebuggingEnabled(true) // disable before Play Store release
 
         webView.addJavascriptInterface(beamWebInterface, "BeamNative")
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String) {
                 loadingView.visibility = View.GONE
-                webView.visibility = View.VISIBLE
-                // Inject native app detection
-                webView.evaluateJavascript(
-                    "window.__BEAM_NATIVE_ANDROID__ = true;", null
-                )
+                webView.visibility     = View.VISIBLE
+                webView.evaluateJavascript("window.__BEAM_NATIVE_ANDROID__ = true;", null)
             }
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                return false // handle all URLs inside the WebView
+            override fun shouldOverrideUrlLoading(
+                view: WebView, request: WebResourceRequest
+            ): Boolean = false
+        }
+
+        // ── WebChromeClient with file chooser support ─────────────────────────
+        // Without overriding onShowFileChooser, tapping the drop zone on Android
+        // does nothing — the file picker never opens.
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                webView: WebView,
+                filePathCallback: ValueCallback<Array<Uri>>,
+                fileChooserParams: FileChooserParams
+            ): Boolean {
+                // Cancel any previous pending callback
+                fileChooserCallback?.onReceiveValue(emptyArray())
+                fileChooserCallback = filePathCallback
+
+                return try {
+                    filePickerLauncher.launch(fileChooserParams.createIntent())
+                    true
+                } catch (e: Exception) {
+                    fileChooserCallback = null
+                    false
+                }
             }
         }
 
-        webView.webChromeClient = WebChromeClient()
-
-        // Load from bundled assets (works offline, no LAN server needed for UI)
         webView.loadUrl("file:///android_asset/index.html")
     }
 
