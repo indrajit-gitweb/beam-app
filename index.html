@@ -4056,6 +4056,30 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     offlineSection.style.display = 'block';
     const ss = document.getElementById('send-status');
     if (ss) ss.textContent = '';
+
+    // Show Android's own QR code immediately when offline mode opens
+    // so other devices can scan it without waiting for discovery
+    if (IS_ANDROID_NATIVE && window.BeamNative?.isRunningServer?.()) {
+      const serverUrl = window.BeamNative.getLocalServerUrl();
+      if (serverUrl) {
+        const box    = document.getElementById('offline-android-box');
+        const urlEl  = document.getElementById('offline-android-url');
+        const qrWrap = document.getElementById('offline-qr-wrap');
+        if (box && urlEl && qrWrap) {
+          urlEl.textContent = serverUrl;
+          qrWrap.innerHTML  = '';
+          box.style.display = 'block';
+          const tryQR = () => {
+            if (typeof QRCode !== 'undefined') {
+              new QRCode(qrWrap, { text: serverUrl, width: 68, height: 68,
+                colorDark: '#000', colorLight: '#fff', correctLevel: QRCode.CorrectLevel.M });
+            } else { setTimeout(tryQR, 200); }
+          };
+          tryQR();
+        }
+      }
+    }
+
     autoDetectConnection();
   };
 
