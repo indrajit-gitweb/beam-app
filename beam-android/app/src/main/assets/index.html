@@ -609,6 +609,10 @@
     .mode-card.offline .mode-card-name { margin-bottom: 2px; }
     .mode-card.offline.active { border-color: #10b981; background: rgba(16,185,129,0.08); }
     .mode-card.offline.active .mode-card-name { color: #34d399; }
+    /* Disabled state — web browser users */
+    .mode-card.offline.unavailable { opacity: .45; cursor: not-allowed; border-style: dashed; }
+    .mode-card.offline.unavailable:hover { border-color: var(--border); background: var(--surface-2); }
+    .offline-unavailable-tag { margin-left: auto; flex-shrink: 0; font-size: .66rem; font-weight: 700; padding: 3px 8px; border-radius: 99px; background: rgba(99,102,241,.1); border: 1px solid rgba(99,102,241,.2); color: var(--accent-2); white-space: nowrap; }
 
     /* ── Offline section (inside send panel) ── */
     #offline-section { margin-top: 18px; }
@@ -1028,8 +1032,11 @@
           </div>
           <div class="mode-card offline" id="mode-offline" role="button" tabindex="0" onclick="selectMode('offline')" onkeydown="if(event.key==='Enter')selectMode('offline')">
             <div class="mode-card-icon"><svg class="icon" width="22" height="22"><use href="#ico-wifi"/></svg></div>
-            <div class="mode-card-name">Offline</div>
-            <div class="mode-card-desc">Same WiFi or Bluetooth · No internet needed · Local devices</div>
+            <div style="flex:1;min-width:0;">
+              <div class="mode-card-name">Offline</div>
+              <div class="mode-card-desc">Same WiFi or Bluetooth · No internet needed · Local devices</div>
+            </div>
+            <span class="offline-unavailable-tag" id="offline-app-tag" style="display:none">App required</span>
           </div>
         </div>
       </div>
@@ -4182,8 +4189,29 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 
   // ── Mode selection ────────────────────────────────────────────────────────
 
+  // ── Disable Offline mode in web browser — requires desktop or Android app ──
+  const _isOfflineAvailable = IS_ELECTRON || IS_ANDROID_NATIVE;
+
+  if (!_isOfflineAvailable) {
+    // Grey out the card and add "App required" tag
+    modeOfflineCard.classList.add('unavailable');
+    modeOfflineCard.setAttribute('aria-disabled', 'true');
+    const tag = document.getElementById('offline-app-tag');
+    if (tag) tag.style.display = '';
+  }
+
   const _origSelectMode = window.selectMode;
   window.selectMode = function(mode) {
+    if (mode === 'offline' && !_isOfflineAvailable) {
+      // Browser user tapped Offline — show download prompt instead
+      if (typeof showPopup === 'function') {
+        showPopup('📱', 'App required for Offline mode',
+          'Offline transfers need the Beam desktop app (Mac/Windows/Linux) or Android app. Download free from GitHub.',
+          'warn', 8000);
+      }
+      return; // do not activate offline mode
+    }
+
     if (mode !== 'offline') {
       offlineSection.style.display      = 'none';
       offlineRecvSection.style.display  = 'none';
