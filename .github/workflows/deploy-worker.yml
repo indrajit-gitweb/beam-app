@@ -1,11 +1,9 @@
 name: Deploy Cloudflare Worker
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'beam-worker/**'
-      - '.github/workflows/deploy-worker.yml'
+  # Auto-deploy disabled — requires CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID
+  # GitHub Secrets to be set before enabling.
+  # To deploy manually: copy beam-worker/ to /tmp, npm install, npm run deploy.
   workflow_dispatch:
 
 jobs:
