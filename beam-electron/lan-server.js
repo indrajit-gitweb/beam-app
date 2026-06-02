@@ -271,10 +271,14 @@ wss.on('connection', ws => {
   });
 });
 
-// ── mDNS announcer ─────────────────────────────────────────────────────────────
-// Responds to _beam-lan._tcp.local queries so devices on the same network
-// can auto-discover this server without knowing the IP address.
+// ── mDNS: announce + browse ────────────────────────────────────────────────────
+// ANNOUNCE: respond to queries so others (Android) can find this Mac server.
+// BROWSE:   actively query for other Beam servers (Android) on the network.
 
+// Track discovered external servers so we don't notify duplicates
+const discoveredServers = new Set(); // Set of "ip:port" strings
+
+// ── Respond to queries (existing announce behaviour) ──────────────────────────
 mdns.on('query', query => {
   const isBeamQuery = query.questions.some(
     q => q.name === '_beam-lan._tcp.local' || q.name === '_services._dns-sd._udp.local'
@@ -308,6 +312,59 @@ mdns.on('query', query => {
   });
 });
 
+// ── Listen for responses (new browse behaviour) ───────────────────────────────
+// When another Beam server (e.g. Android) replies to our PTR query,
+// extract its IP + port and notify all connected WebSocket clients so their
+// frontend can connect to it as an additional peer server.
+
+mdns.on('response', response => {
+  let name = null, ip = null, port = PORT;
+
+  for (const answer of [...(response.answers || []), ...(response.additionals || [])]) {
+    if (answer.type === 'PTR' && answer.name === '_beam-lan._tcp.local') {
+      name = answer.data; // e.g. "Pixel7._beam-lan._tcp.local"
+    }
+    if (answer.type === 'SRV' && answer.data) {
+      port = answer.data.port || PORT;
+    }
+    if (answer.type === 'A' && answer.data) {
+      ip = answer.data;
+    }
+  }
+
+  if (!ip || !name) return;
+
+  // Skip our own address
+  const localIp = getLocalIp();
+  if (ip === localIp || ip === '127.0.0.1') return;
+
+  const key = `${ip}:${port}`;
+  if (discoveredServers.has(key)) return; // already notified
+  discoveredServers.add(key);
+
+  const deviceName = name.replace(/\._beam-lan\._tcp\.local$/, '');
+  const serverUrl  = `http://${ip}:${port}`;
+
+  console.log(`[beam-lan] Discovered external Beam server: ${deviceName} @ ${serverUrl}`);
+
+  // Notify all connected WebSocket clients — frontend connects to it as extra peer
+  const msg = JSON.stringify({
+    type:       'external-server-found',
+    url:        serverUrl,
+    deviceName,
+  });
+  peers.forEach(p => {
+    try { if (p.ws.readyState === 1) p.ws.send(msg); } catch (_) {}
+  });
+});
+
+// ── Active browse: send PTR query every 6s to discover new devices ────────────
+function browseForBeamDevices() {
+  mdns.query({ questions: [{ name: '_beam-lan._tcp.local', type: 'PTR' }] });
+}
+
+let browseInterval = null;
+
 function getLocalIp() {
   const ifaces = os.networkInterfaces();
   for (const name of Object.keys(ifaces)) {
@@ -327,6 +384,11 @@ function start() {
       console.log(`[beam-lan] Server running on http://${ip}:${PORT}`);
       console.log(`[beam-lan] Device name: ${DEVICE_NAME}`);
       console.log(`[beam-lan] Android: open http://${ip}:${PORT} in browser`);
+
+      // Start active browsing immediately then every 6s
+      browseForBeamDevices();
+      browseInterval = setInterval(browseForBeamDevices, 6000);
+
       resolve({ port: PORT, ip, name: DEVICE_NAME });
     });
     httpServer.on('error', reject);
@@ -334,6 +396,8 @@ function start() {
 }
 
 function stop() {
+  if (browseInterval) { clearInterval(browseInterval); browseInterval = null; }
+  discoveredServers.clear();
   mdns.destroy();
   httpServer.close();
 }

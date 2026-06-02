@@ -4093,6 +4093,18 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
           window._offlineIncomingFile   = { name: msg.filename, size: msg.filesize };
           break;
         }
+
+        case 'external-server-found': {
+          // Mac's LAN server discovered another Beam server (e.g. Android)
+          // via active mDNS browsing. Connect to it so both sides see each other.
+          const extUrl = msg.url;
+          if (!extUrl || externalServers.has(extUrl)) break;
+          externalServers.add(extUrl);
+
+          console.log('[beam-lan] Connecting to external server:', extUrl);
+          connectToExternalServer(extUrl, msg.deviceName);
+          break;
+        }
       }
     };
 
@@ -4100,6 +4112,72 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       lanWs = null;
       peers = [];
     };
+  }
+
+  // ── External server connections (Mac discovers Android) ───────────────────
+  // When Mac's mDNS browser finds another Beam server, Mac's frontend
+  // connects to it as a peer. Both sides now see each other in device list.
+
+  const externalServers = new Set();     // URLs already connected
+  const externalWsMap   = new Map();     // url → WebSocket
+
+  async function connectToExternalServer(url, deviceName) {
+    const wsUrl = url.replace(/^http/, 'ws');
+    const extWs = new WebSocket(wsUrl);
+    const timeout = setTimeout(() => { extWs.close(); }, 5000);
+
+    extWs.onopen = () => {
+      clearTimeout(timeout);
+      extWs.send(JSON.stringify({
+        type:       'register',
+        id:         myPeerId   || ('ext-' + Math.random().toString(36).slice(2)),
+        name:       myPeerName || 'Mac',
+        deviceType: 'laptop',
+      }));
+      externalWsMap.set(url, extWs);
+      console.log('[beam-lan] Connected to external server:', url);
+    };
+
+    extWs.onmessage = event => {
+      let msg2;
+      try { msg2 = JSON.parse(event.data); } catch { return; }
+
+      if (msg2.type === 'peers') {
+        // Merge external peers into our list (tagged so we know which server to use)
+        const extPeers = msg2.list
+          .filter(p => p.id !== myPeerId)
+          .map(p => ({ ...p, _externalWs: extWs, _externalUrl: url }));
+
+        // Deduplicate and update device list
+        const merged = [...peers.filter(p => !p._externalUrl || p._externalUrl !== url), ...extPeers];
+        peers = merged;
+
+        const devStep = document.getElementById('offline-step-devices');
+        if (devStep && devStep.style.display !== 'none') {
+          renderDeviceList(peers);
+        }
+      }
+
+      // Forward signals from external server (for WebRTC if needed)
+      if (msg2.type === 'signal' && lanWs && lanWs.readyState === WebSocket.OPEN) {
+        lanWs.send(JSON.stringify(msg2));
+      }
+    };
+
+    extWs.onclose = () => {
+      externalServers.delete(url);
+      externalWsMap.delete(url);
+      peers = peers.filter(p => p._externalUrl !== url);
+    };
+  }
+
+  // Use the correct WebSocket for signalling depending on which server the peer is on
+  function sendSignal(targetPeer, payload) {
+    if (targetPeer._externalWs && targetPeer._externalWs.readyState === WebSocket.OPEN) {
+      targetPeer._externalWs.send(JSON.stringify(payload));
+    } else if (lanWs && lanWs.readyState === WebSocket.OPEN) {
+      lanWs.send(JSON.stringify(payload));
+    }
   }
 
   // ── Mode selection ────────────────────────────────────────────────────────
@@ -4406,10 +4484,11 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     document.getElementById('offline-waiting-device').textContent = dev.name;
     showOfflineStep('waiting');
 
-    if (lanWs && lanWs.readyState === WebSocket.OPEN) {
-      // Real mode: send transfer request and wait for acceptance
+    const devWs = dev._externalWs || lanWs;
+    if (devWs && devWs.readyState === WebSocket.OPEN) {
+      // Real mode: send transfer request via the correct server (own or external)
       const files = filesToSend;
-      lanWs.send(JSON.stringify({
+      devWs.send(JSON.stringify({
         type:  'transfer-request',
         to:    dev.id,
         files: files.map(f => ({ name: f.name, size: f.size, type: f.type })),
