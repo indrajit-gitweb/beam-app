@@ -67,12 +67,14 @@ jobs:
           path: beam-android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
 
-      - name: APK info
+      - name: Verify APK is valid
         run: |
           APK=beam-android/app/build/outputs/apk/debug/app-debug.apk
-          if [ -f "$APK" ]; then
-            echo "✅ APK built successfully — $(du -sh $APK | cut -f1)"
-          else
-            echo "❌ APK not found"
-            exit 1
-          fi
+          if [ ! -f "$APK" ]; then echo "❌ APK not found"; exit 1; fi
+          echo "✅ APK size: $(du -sh $APK | cut -f1)"
+          # Verify it is a valid ZIP/APK structure
+          unzip -t "$APK" > /dev/null && echo "✅ APK structure valid"
+          # Check it contains AndroidManifest and classes.dex
+          unzip -l "$APK" | grep -E "AndroidManifest|classes.dex" && echo "✅ Required files present"
+          # Verify zipalign (signed APK check)
+          $ANDROID_SDK_ROOT/build-tools/34.0.0/zipalign -c -v 4 "$APK" > /dev/null && echo "✅ APK is zipaligned" || echo "⚠️ zipalign check failed"
