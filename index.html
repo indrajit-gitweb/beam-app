@@ -609,10 +609,21 @@
     .mode-card.offline .mode-card-name { margin-bottom: 2px; }
     .mode-card.offline.active { border-color: #10b981; background: rgba(16,185,129,0.08); }
     .mode-card.offline.active .mode-card-name { color: #34d399; }
-    /* Disabled state — web browser users */
-    .mode-card.offline.unavailable { opacity: .45; cursor: not-allowed; border-style: dashed; }
-    .mode-card.offline.unavailable:hover { border-color: var(--border); background: var(--surface-2); }
-    .offline-unavailable-tag { margin-left: auto; flex-shrink: 0; font-size: .66rem; font-weight: 700; padding: 3px 8px; border-radius: 99px; background: rgba(99,102,241,.1); border: 1px solid rgba(99,102,241,.2); color: var(--accent-2); white-space: nowrap; }
+    /* Disabled state — web browser users (strong visual) */
+    .mode-card.offline.unavailable {
+      opacity: .55; cursor: not-allowed;
+      border: 1.5px dashed rgba(239,68,68,.5) !important;
+      background: rgba(239,68,68,.04) !important;
+      position: relative;
+    }
+    .mode-card.offline.unavailable:hover { border-color: rgba(239,68,68,.7) !important; background: rgba(239,68,68,.06) !important; }
+    .mode-card.offline.unavailable .mode-card-name { color: var(--muted-2) !important; }
+    .mode-card.offline.unavailable .mode-card-icon svg { color: var(--muted) !important; }
+    /* App-required banner inside the card */
+    .offline-app-required-msg { width: 100%; margin-top: 6px; font-size: .71rem; color: rgba(239,68,68,.9); font-weight: 600; line-height: 1.4; display: none; }
+    .mode-card.offline.unavailable .offline-app-required-msg { display: block; }
+    /* "App only" red badge */
+    .offline-unavailable-tag { margin-left: auto; flex-shrink: 0; font-size: .66rem; font-weight: 700; padding: 3px 9px; border-radius: 99px; background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35); color: var(--error); white-space: nowrap; }
 
     /* ── Offline section (inside send panel) ── */
     #offline-section { margin-top: 18px; }
@@ -1030,13 +1041,17 @@
             <div class="mode-card-name">Cloud Transfer</div>
             <div class="mode-card-desc">Upload to cloud · Sender can close tab · Auto-expires</div>
           </div>
-          <div class="mode-card offline" id="mode-offline" role="button" tabindex="0" onclick="selectMode('offline')" onkeydown="if(event.key==='Enter')selectMode('offline')">
+          <div class="mode-card offline" id="mode-offline" role="button" tabindex="0" onclick="selectMode('offline')" onkeydown="if(event.key==='Enter')selectMode('offline')" style="flex-wrap:wrap;">
             <div class="mode-card-icon"><svg class="icon" width="22" height="22"><use href="#ico-wifi"/></svg></div>
             <div style="flex:1;min-width:0;">
               <div class="mode-card-name">Offline</div>
               <div class="mode-card-desc">Same WiFi or Bluetooth · No internet needed · Local devices</div>
             </div>
-            <span class="offline-unavailable-tag" id="offline-app-tag" style="display:none">App required</span>
+            <span class="offline-unavailable-tag" id="offline-app-tag" style="display:none">App only</span>
+            <!-- Message shown only when unavailable (browser users) -->
+            <div class="offline-app-required-msg" id="offline-app-required-msg">
+              ⚠️ Not available in browser — requires the Beam desktop or Android app. Use P2P or Cloud instead.
+            </div>
           </div>
         </div>
       </div>
@@ -1601,6 +1616,15 @@
 
     <!-- Offline steps -->
     <div class="hiw-mode" id="hiw-offline">
+      <!-- Warning banner — shown only in browser, hidden in app -->
+      <div id="hiw-offline-browser-warning" style="display:none;margin-bottom:18px;padding:14px 18px;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.25);border-radius:var(--radius-sm);">
+        <p style="font-size:.82rem;font-weight:700;color:var(--error);margin-bottom:5px;">⚠️ Offline mode is not available in the browser</p>
+        <p style="font-size:.76rem;color:var(--muted-2);line-height:1.6;">
+          This feature requires the <strong style="color:var(--text)">Beam desktop app</strong> (Mac / Windows / Linux) or the <strong style="color:var(--text)">Android app</strong> to run a local server on your device.<br>
+          In the browser, use <strong style="color:var(--accent-2)">P2P Direct</strong> or <strong style="color:#38bdf8">Cloud Transfer</strong> instead.
+          <a href="https://github.com/indrajit-gitweb/beam-app/actions" target="_blank" rel="noopener" style="color:#34d399;margin-left:6px;font-weight:700;">↓ Download app</a>
+        </p>
+      </div>
       <div class="how-grid">
         <div class="how-col offline-send-col">
           <div class="how-col-title"><svg class="icon" width="14" height="14"><use href="#ico-send"/></svg> Send Files</div>
@@ -4193,11 +4217,20 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   const _isOfflineAvailable = IS_ELECTRON || IS_ANDROID_NATIVE;
 
   if (!_isOfflineAvailable) {
-    // Grey out the card and add "App required" tag
+    // Strong visual: red dashed border + grayed out + in-card message + badge
     modeOfflineCard.classList.add('unavailable');
     modeOfflineCard.setAttribute('aria-disabled', 'true');
+
+    // Show "App only" red badge
     const tag = document.getElementById('offline-app-tag');
-    if (tag) tag.style.display = '';
+    if (tag) tag.style.display = 'inline-flex';
+
+    // Show in-card warning message (already in HTML, just needs display)
+    // The CSS handles this via .mode-card.offline.unavailable .offline-app-required-msg
+
+    // Show warning in "How it works" Offline tab too
+    const hiwWarning = document.getElementById('hiw-offline-browser-warning');
+    if (hiwWarning) hiwWarning.style.display = 'block';
   }
 
   const _origSelectMode = window.selectMode;
