@@ -84,6 +84,10 @@ jobs:
         working-directory: beam-electron
         run: npm install --no-audit --no-fund
 
+      - name: Generate icon.ico from icon.png
+        # NSIS installer requires .ico format — ImageMagick is pre-installed on windows-latest
+        run: magick beam-electron/build/icon.png -resize 256x256 beam-electron/build/icon.ico
+
       - name: Build Windows packages
         working-directory: beam-electron
         run: npx electron-builder --win --publish never
