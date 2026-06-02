@@ -7,7 +7,7 @@ on:
       - 'beam-android/**'
       - 'index.html'
       - '.github/workflows/build-android.yml'
-  workflow_dispatch:   # allows manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   build:
@@ -23,16 +23,22 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
+          cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Accept Android SDK licenses
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "platform-tools" 2>/dev/null || true
 
       - name: Copy latest index.html into Android assets
         run: |
           cp index.html beam-android/app/src/main/assets/index.html
-          echo "Copied index.html ($(wc -c < beam-android/app/src/main/assets/index.html) bytes)"
+          echo "Copied index.html — $(wc -c < beam-android/app/src/main/assets/index.html) bytes"
 
-      - name: Grant execute permission for Gradle wrapper
+      - name: Grant execute permission for gradlew
         run: chmod +x beam-android/gradlew
 
       - name: Cache Gradle packages
@@ -46,17 +52,24 @@ jobs:
 
       - name: Build debug APK
         working-directory: beam-android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
-      - name: Upload APK as artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Beam-Android-debug
           path: beam-android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
 
-      - name: Show APK info
+      - name: APK info
         run: |
           APK=beam-android/app/build/outputs/apk/debug/app-debug.apk
-          echo "APK size: $(du -sh $APK | cut -f1)"
-          echo "APK path: $APK"
+          if [ -f "$APK" ]; then
+            echo "✅ APK built successfully"
+            echo "Size: $(du -sh $APK | cut -f1)"
+          else
+            echo "❌ APK not found"
+            exit 1
+          fi
