@@ -207,7 +207,6 @@ class BeamLanServer(
     private fun handleUpload(session: IHTTPSession): Response {
         val h          = session.headers
         val filename   = decode(h["x-filename"]  ?: "beam-file")
-        val filetype   = h["x-filetype"]         ?: "application/octet-stream"
         val fromName   = decode(h["x-from-name"] ?: "sender")
         val contentLen = h["content-length"]?.toLongOrNull() ?: -1L
         val fileIndex  = h["x-file-index"]?.toIntOrNull()  ?: 0

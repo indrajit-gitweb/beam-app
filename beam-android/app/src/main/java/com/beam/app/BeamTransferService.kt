@@ -12,6 +12,7 @@ import android.util.Log
 import kotlinx.coroutines.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import java.io.File
 import java.io.FileOutputStream
@@ -101,7 +102,7 @@ class BeamTransferService : Service() {
                 val announceResp = http.newCall(
                     Request.Builder()
                         .url("http://$receiverIp:${BeamLanServer.PORT}/send-request")
-                        .post(RequestBody.create("application/json".toMediaType(), announceBody))
+                        .post(announceBody.toRequestBody("application/json".toMediaType()))
                         .build()
                 ).execute()
 
