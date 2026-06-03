@@ -672,18 +672,32 @@
     .offline-device-list { margin-top: 8px; }
     .offline-device-list-title { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin-bottom: 8px; }
     .offline-device-item {
-      display: flex; align-items: center; gap: 12px;
-      padding: 12px 14px; border: 1px solid var(--border);
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; border: 1px solid var(--border);
       border-radius: var(--radius-sm); background: var(--surface-2);
       cursor: pointer; transition: border-color .15s, background .15s;
-      margin-bottom: 7px;
+      margin-bottom: 6px;
     }
     .offline-device-item:hover { border-color: #10b981; background: rgba(16,185,129,.06); }
     .offline-device-item:last-child { margin-bottom: 0; }
-    .offline-device-ico { color: #34d399; display: flex; align-items: center; flex-shrink: 0; }
-    .offline-device-info { flex: 1; min-width: 0; }
-    .offline-device-name { font-size: .85rem; font-weight: 600; color: var(--text); }
-    .offline-device-meta { font-size: .72rem; color: var(--muted); margin-top: 2px; }
+    /* Icon bubble */
+    .offline-device-icon-wrap {
+      width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+      background: rgba(16,185,129,.12); display: flex; align-items: center; justify-content: center;
+    }
+    .offline-device-icon {
+      width: 18px; height: 18px; color: #34d399; display: block; flex-shrink: 0;
+    }
+    .offline-device-info { flex: 1; min-width: 0; overflow: hidden; }
+    .offline-device-name {
+      font-size: .84rem; font-weight: 600; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .offline-device-sub {
+      font-size: .71rem; color: var(--muted); margin-top: 1px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .offline-device-arrow { color: var(--muted); flex-shrink: 0; font-size: .8rem; }
     .offline-device-signal { font-size: .7rem; color: #34d399; margin-left: auto; white-space: nowrap; }
 
     /* Waiting for accept state */
@@ -3433,8 +3447,9 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       showOfflineStep('devices');
     }
 
-    // Show QR code on Mac so Android can connect
-    if (IS_ELECTRON) showOfflineQR();
+    // Show QR code (Mac: shows URL so Android can connect via browser;
+    // Android: shows own URL so others can scan it)
+    showOfflineQR();
     startPendingPoll();  // start polling for incoming requests
   }
 
@@ -3517,21 +3532,35 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   }
 
   // ── Device list render ─────────────────────────────────────────────────────
+  function platformLabel(p) {
+    if (!p) return 'Beam';
+    const m = { android: 'Android', mac: 'Mac', windows: 'Windows', linux: 'Linux' };
+    return m[p.toLowerCase()] || p;
+  }
+
   function renderDeviceList() {
     const container = document.getElementById('offline-device-items');
     if (!container) return;
     container.innerHTML = '';
     devices.forEach(dev => {
+      const isPhone = dev.platform === 'android' || dev.platform === 'ios';
       const item = document.createElement('div');
       item.className = 'offline-device-item';
       item.innerHTML = `
-        <svg class="offline-device-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <use href="${getDeviceIcon(dev.platform === 'android' ? 'phone' : 'laptop')}"/>
-        </svg>
+        <div class="offline-device-icon-wrap">
+          <svg class="offline-device-icon" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+               stroke-linejoin="round" aria-hidden="true">
+            ${isPhone
+              ? '<rect x="7" y="2" width="10" height="20" rx="2"/><circle cx="12" cy="17.5" r=".8" fill="currentColor" stroke="none"/>'
+              : '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>'}
+          </svg>
+        </div>
         <div class="offline-device-info">
           <div class="offline-device-name">${escHtml(dev.name)}</div>
-          <div class="offline-device-sub">${dev.ip} · ${escHtml(dev.platform)}</div>
-        </div>`;
+          <div class="offline-device-sub">${platformLabel(dev.platform)} · ${dev.ip}</div>
+        </div>
+        <span class="offline-device-arrow">›</span>`;
       item.addEventListener('click', () => selectOfflineDevice(dev));
       container.appendChild(item);
     });
@@ -3919,7 +3948,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     if (!box || box.dataset.qrRendered) return;
     box.dataset.qrRendered = '1';
 
-    async function renderQR(url) {
+    function renderQR(url) {
       if (!url) return;
       urlEl.textContent = url;
       qrWrap.innerHTML  = '';
@@ -3934,9 +3963,19 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }
 
     if (IS_ELECTRON) {
+      // Mac: get IP from Electron IPC
       window.electronAPI?.getLanInfo?.().then(info => {
         if (info?.ip) renderQR('http://' + info.ip + ':' + LAN_PORT);
       }).catch(() => {});
+    } else if (isAndroid() && window.BeamNative) {
+      // Android: show own server URL so others can scan and open Beam in browser
+      const ip = window.BeamNative.getLocalIp?.() || '';
+      if (ip) {
+        renderQR('http://' + ip + ':' + LAN_PORT);
+        // Update the box title to make its purpose clear
+        const titleEl = document.querySelector('#offline-android-box .offline-android-title');
+        if (titleEl) titleEl.textContent = '📱 Share your address';
+      }
     }
   }
 
