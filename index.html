@@ -4095,6 +4095,85 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // Shows immediately when offline mode opens — receiver scans, browser opens,
   // loads Beam, auto-connects to this device's LAN server. No app needed.
 
+  // ── Subnet scanner — finds Beam devices without mDNS ────────────────────────
+  // Same approach as LocalSend: probe every IP on the subnet via HTTP.
+  // Works on corporate/enterprise WiFi where mDNS multicast is blocked.
+
+  async function scanSubnetForBeam() {
+    // Discover local IP via WebRTC ICE (works on both Android and browser)
+    const localIp = await getLocalIpViaWebRTC();
+    if (!localIp) { console.log('[subnet] Could not determine local IP'); return; }
+
+    const parts  = localIp.split('.');
+    const subnet = parts.slice(0, 3).join('.');
+    const myOctet = parts[3];
+
+    console.log(`[subnet] Scanning ${subnet}.1-254 for Beam devices…`);
+
+    // Scan all 254 addresses in parallel with 600ms timeout each
+    const probes = [];
+    for (let i = 1; i <= 254; i++) {
+      if (i.toString() === myOctet) continue;
+      probes.push(probeBeamDevice(`${subnet}.${i}`));
+    }
+    await Promise.allSettled(probes);
+    console.log('[subnet] Scan complete');
+  }
+
+  async function probeBeamDevice(ip) {
+    const url = `http://${ip}:${LAN_PORT}/health`;
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 600);
+      const res   = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!res.ok) return;
+      const h = await res.json();
+      if (!h.ok) return;
+
+      // Found a Beam device — connect to it
+      const serverUrl = `http://${ip}:${LAN_PORT}`;
+      console.log(`[subnet] Found: ${h.name} @ ${serverUrl}`);
+
+      // Use same external server connect path
+      if (typeof connectToExternalServer === 'function') {
+        connectToExternalServer(serverUrl, h.name);
+      } else {
+        // Inline fallback for browser context
+        const wsUrl = `ws://${ip}:${LAN_PORT}`;
+        if (window._lanWsRef && window._lanWsRef.readyState === WebSocket.OPEN) return;
+        const ws2 = new WebSocket(wsUrl);
+        ws2.onopen = () => {
+          const id2   = sessionStorage.getItem('beam_peer_id') || 'browser-' + Math.random().toString(36).slice(2);
+          const name2 = (window.BeamNative?.getDeviceName?.() || navigator.platform || 'Browser');
+          ws2.send(JSON.stringify({ type: 'register', id: id2, name: name2, deviceType: 'phone' }));
+          window._lanWsRef = ws2;
+          const banner = document.getElementById('lan-connected-banner');
+          if (banner) banner.style.display = 'flex';
+        };
+      }
+    } catch(_) {}
+  }
+
+  async function getLocalIpViaWebRTC() {
+    return new Promise(resolve => {
+      try {
+        const pc = new RTCPeerConnection({ iceServers: [] });
+        pc.createDataChannel('');
+        pc.createOffer().then(o => pc.setLocalDescription(o));
+        pc.onicecandidate = e => {
+          if (!e?.candidate) return;
+          const m = e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
+          if (m && !m[1].startsWith('127.') && m[1] !== '0.0.0.0') {
+            resolve(m[1]);
+            pc.close();
+          }
+        };
+        setTimeout(() => { pc.close(); resolve(null); }, 3000);
+      } catch(_) { resolve(null); }
+    });
+  }
+
   function showOfflineQR() {
     const box    = document.getElementById('offline-android-box');
     const urlEl  = document.getElementById('offline-android-url');
@@ -4256,6 +4335,15 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         setTimeout(() => {
           const deviceList = ws ? peers : (IS_ANDROID_NATIVE ? [] : FAKE_DEVICES);
           renderDeviceList(deviceList);
+
+          // If no peers found via mDNS, launch subnet scanner (like LocalSend)
+          // Works on corporate WiFi where mDNS multicast is blocked
+          if (deviceList.length === 0) {
+            console.log('[offline] No peers via mDNS — starting subnet scan…');
+            document.getElementById('offline-scan-note').textContent =
+              'Scanning network… (this works on corporate WiFi too)';
+            scanSubnetForBeam();
+          }
 
           // Show QR code if Android is running its own server
           if (IS_ANDROID_NATIVE && window.BeamNative?.isRunningServer?.()) {

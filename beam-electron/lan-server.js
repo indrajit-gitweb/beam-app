@@ -365,6 +365,62 @@ function browseForBeamDevices() {
 
 let browseInterval = null;
 
+// ── Subnet scanner (fallback for networks that block mDNS) ────────────────────
+// Like LocalSend: probes every IP on the local subnet via HTTP.
+// Runs once on start, then every 30s. Finds Beam devices without multicast.
+
+async function scanSubnetForBeam() {
+  const localIp = getLocalIp();
+  if (!localIp || localIp === '127.0.0.1') return;
+
+  const subnet = localIp.split('.').slice(0, 3).join('.');
+  const myOctet = localIp.split('.')[3];
+
+  console.log(`[beam-lan] Scanning subnet ${subnet}.1-254 for Beam devices…`);
+
+  const probes = [];
+  for (let i = 1; i <= 254; i++) {
+    if (i.toString() === myOctet) continue; // skip self
+    const ip = `${subnet}.${i}`;
+    probes.push(probeIp(ip));
+  }
+
+  await Promise.allSettled(probes);
+}
+
+function probeIp(ip) {
+  return new Promise(resolve => {
+    const key = `${ip}:${PORT}`;
+    if (discoveredServers.has(key)) { resolve(); return; } // already found
+
+    const req = require('http').get(
+      { host: ip, port: PORT, path: '/health', timeout: 600 },
+      res => {
+        let body = '';
+        res.on('data', d => body += d);
+        res.on('end', () => {
+          try {
+            const h = JSON.parse(body);
+            if (h.ok && !discoveredServers.has(key)) {
+              discoveredServers.add(key);
+              const serverUrl = `http://${ip}:${PORT}`;
+              console.log(`[beam-lan] Subnet scan found: ${h.name} @ ${serverUrl}`);
+              const msg = JSON.stringify({ type: 'external-server-found', url: serverUrl, deviceName: h.name });
+              peers.forEach(p => {
+                try { if (p.ws.readyState === 1) p.ws.send(msg); } catch(_) {}
+              });
+            }
+          } catch(_) {}
+          resolve();
+        });
+      }
+    );
+    req.on('error', () => resolve());
+    req.on('timeout', () => { req.destroy(); resolve(); });
+    req.setTimeout(600);
+  });
+}
+
 function getLocalIp() {
   const ifaces = os.networkInterfaces();
   for (const name of Object.keys(ifaces)) {
@@ -387,7 +443,11 @@ function start() {
 
       // Start active browsing immediately then every 6s
       browseForBeamDevices();
+      // Subnet scan as fallback for networks that block mDNS (like corporate WiFi)
+      setTimeout(() => scanSubnetForBeam(), 2000); // first scan 2s after start
       browseInterval = setInterval(browseForBeamDevices, 6000);
+      // Repeat subnet scan every 30s (in case new devices join later)
+      setInterval(() => scanSubnetForBeam(), 30000);
 
       resolve({ port: PORT, ip, name: DEVICE_NAME });
     });
