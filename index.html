@@ -3909,9 +3909,15 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         case 'peers': {
           // Filter out ourselves
           peers = msg.list.filter(p => p.id !== myPeerId);
-          // If device list is showing, refresh it
           const devStep = document.getElementById('offline-step-devices');
-          if (devStep && devStep.style.display !== 'none') {
+          if (peers.length > 0 && (!devStep || devStep.style.display === 'none')) {
+            // A peer just connected (e.g. via QR scan) — switch to device list automatically
+            renderDeviceList(peers);
+            showOfflineStep('devices');
+            if (typeof showPopup === 'function') {
+              showPopup('📱', `${peers[0].name} connected!`, 'Tap their name to send files.', 'success', 5000);
+            }
+          } else if (devStep && devStep.style.display !== 'none') {
             renderDeviceList(peers);
           }
           break;
