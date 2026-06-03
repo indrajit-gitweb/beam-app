@@ -2250,6 +2250,12 @@ function addFilesToQueue(newFiles) {
     } else {
       if (!senderPeer) startSenderPeer();
     }
+    // Scroll the file queue into view so the user can see the added files,
+    // especially on mobile where the queue appears below the drop zone
+    setTimeout(() => {
+      const qs = document.getElementById('file-queue-section');
+      if (qs) qs.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 100);
   }
 }
 

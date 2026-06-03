@@ -39,12 +39,41 @@ class MainActivity : AppCompatActivity() {
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
-            ?: emptyArray()
+        val uris = extractUris(result.resultCode, result.data)
         fileChooserCallback?.onReceiveValue(uris)
         fileChooserCallback = null
         // Store for native background upload — avoids loading into JS memory
         if (uris.isNotEmpty()) beamWebInterface.storeSelectedUris(uris)
+        Log.d("MainActivity", "File picker returned ${uris.size} URI(s)")
+    }
+
+    /**
+     * Extract URIs from a file-picker result, handling both single and multi-select.
+     *
+     * WebChromeClient.FileChooserParams.parseResult() checks getData() first —
+     * if it returns even one URI it stops there and ignores getClipData(), so
+     * only the first file comes through when the user picks several.
+     * Android photo-picker and Files app both put multi-select results in
+     * ClipData, so we check that first.
+     */
+    private fun extractUris(resultCode: Int, data: android.content.Intent?): Array<Uri> {
+        if (data == null || resultCode != android.app.Activity.RESULT_OK) return emptyArray()
+
+        // Multiple files → ClipData (photo picker, Files app with multi-select)
+        data.clipData?.let { clip ->
+            if (clip.itemCount > 0) {
+                Log.d("MainActivity", "extractUris: ClipData has ${clip.itemCount} items")
+                return Array(clip.itemCount) { clip.getItemAt(it).uri }
+            }
+        }
+
+        // Single file → getData()
+        data.data?.let { uri ->
+            Log.d("MainActivity", "extractUris: single getData() URI")
+            return arrayOf(uri)
+        }
+
+        return emptyArray()
     }
 
     // ── Broadcast receiver ─────────────────────────────────────────────────────
