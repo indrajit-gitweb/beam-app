@@ -280,6 +280,18 @@ class BeamLanServer(
                 }
             } finally { fos.flush(); fos.close() }
 
+            // ── Incomplete: sender cancelled mid-stream ──────────────────────
+            // read() returned -1 before Content-Length was satisfied — the sender
+            // dropped the connection (cancelled or crashed). Delete the partial
+            // file and notify the UI instead of claiming success.
+            if (contentLen > 0 && total < contentLen) {
+                dest.delete()
+                Log.d(TAG, "Incomplete upload — deleted partial: $total/$contentLen bytes")
+                context.sendBroadcast(Intent(BeamTransferService.ACTION_TRANSFER_CANCELLED))
+                return newFixedLengthResponse(
+                    Response.Status.INTERNAL_ERROR, "text/plain", "incomplete")
+            }
+
             Log.d(TAG, "Saved $total bytes → ${dest.absolutePath}")
 
             // Notify user

@@ -212,7 +212,28 @@ const httpServer = http.createServer((req, res) => {
     const contentLen = parseInt(req.headers['content-length'] || '0', 10);
     const writeStream = fs.createWriteStream(destPath);
     let total = 0;
-    let lastPct = -1;   // throttle progress to 1% increments
+    let lastPct = -1;
+    let streamEnded = false;   // true only when req fires 'end' (all bytes received)
+
+    // ── Sender dropped the connection before finishing ─────────────────────────
+    // This fires for BOTH clean close (after end) and premature drops.
+    // The streamEnded flag lets us tell them apart.
+    req.on('close', () => {
+      if (!streamEnded) {
+        // Sender disconnected mid-transfer (cancelled or crashed)
+        writeStream.destroy();
+        try { fs.unlinkSync(destPath); } catch (_) {}
+        console.log(`[beam-lan] Upload aborted by sender: ${filename} (${total}/${contentLen} bytes)`);
+        // Tell the browser the transfer was cancelled
+        browsers.forEach(ws => {
+          try {
+            if (ws.readyState === 1)
+              ws.send(JSON.stringify({ type: 'transfer-cancelled', filename }));
+          } catch (_) {}
+        });
+        if (!res.headersSent) { res.writeHead(499); res.end('cancelled'); }
+      }
+    });
 
     req.on('data', chunk => {
       // Check mid-transfer cancel
@@ -243,8 +264,25 @@ const httpServer = http.createServer((req, res) => {
     });
 
     req.on('end', () => {
+      streamEnded = true;
       writeStream.end();
       writeStream.on('finish', () => {
+        // ── Incomplete transfer: bytes received < Content-Length ──────────────
+        // Happens when sender cancelled after we already got 'end' but data
+        // was truncated (e.g. chunked encoding signalled end early).
+        if (contentLen > 0 && total < contentLen) {
+          try { fs.unlinkSync(destPath); } catch (_) {}
+          console.log(`[beam-lan] Incomplete upload (${total}/${contentLen}): ${filename}`);
+          browsers.forEach(ws => {
+            try {
+              if (ws.readyState === 1)
+                ws.send(JSON.stringify({ type: 'transfer-cancelled', filename }));
+            } catch (_) {}
+          });
+          if (!res.headersSent) { res.writeHead(499); res.end('cancelled'); }
+          return;
+        }
+
         console.log(`[beam-lan] Saved ${path.basename(destPath)} (${total} bytes) from ${fromName}`);
 
         // Notify the browser
