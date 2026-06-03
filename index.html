@@ -631,6 +631,17 @@
     .tg-fix { font-size: .72rem; color: var(--muted); line-height: 1.6; background: rgba(0,0,0,.2); border-radius: 6px; padding: 7px 10px; margin-top: 5px; font-family: monospace; }
 
     /* No device found state */
+    /* Beam Blaze platform note */
+    .blaze-platform-note {
+      font-size: .74rem; color: #fb923c;
+      background: rgba(249,115,22,.08); border: 1px solid rgba(249,115,22,.25);
+      border-radius: 6px; padding: 7px 10px; margin-bottom: 10px; text-align: left;
+    }
+    /* Blaze scan countdown timer */
+    .blaze-scan-timer {
+      font-size: .72rem; color: rgba(249,115,22,.6);
+      font-variant-numeric: tabular-nums; margin-top: 8px;
+    }
     /* Beam Blaze button */
     .beam-blaze-btn {
       width: 100%; margin-top: 10px; padding: 11px;
@@ -1152,13 +1163,18 @@
           <div class="offline-notfound-wrap">
             <div class="offline-notfound-icon">🔥</div>
             <div class="offline-notfound-title">Beam Blaze needs access</div>
+            <!-- Android-only notice -->
+            <div class="blaze-platform-note">
+              📱 <strong>Android to Android only</strong> — Beam Blaze does not
+              work with iPhone, Mac, or Windows.
+            </div>
             <div class="offline-notfound-hint" style="text-align:left">
               Beam Blaze uses <strong>Bluetooth</strong> and <strong>WiFi Direct</strong>
-              to connect directly to nearby devices — no router or internet needed.<br><br>
+              to connect directly to nearby Android devices — no router or internet needed.<br><br>
               You'll see <strong>1–2 permission prompts</strong>:<br>
               • <strong>"Nearby devices"</strong> — covers all Bluetooth access<br>
               • <strong>"Location"</strong> — Android 9–11 only; required by the OS for
-              Bluetooth scanning (we never access your location)
+              Bluetooth scanning (we never use your location)
             </div>
             <button class="offline-retry-scan-btn" onclick="requestBlazePermissions()">
               Allow &amp; Start Beam Blaze 🔥
@@ -1168,17 +1184,37 @@
           </div>
         </div>
 
-        <!-- Beam Blaze: scanning -->
+        <!-- Beam Blaze: scanning (with cancel + countdown) -->
         <div id="offline-step-blaze-scan" style="display:none">
           <div class="offline-scanning-wrap">
             <div class="offline-scan-ring" style="border-top-color:#f97316"></div>
-            <div class="offline-scanning-title">
-              🔥 Beam Blaze — searching nearby…
-            </div>
+            <div class="offline-scanning-title">🔥 Beam Blaze — searching nearby…</div>
             <div class="offline-scan-note">
               Ask the other person to open <strong>Beam</strong> and tap
               <strong>Receive</strong> — that's all they need to do
             </div>
+            <div class="blaze-scan-timer" id="blaze-scan-timer">60s</div>
+          </div>
+          <button class="offline-cancel-btn xfer-cancel-btn" style="margin-top:14px"
+                  onclick="cancelBlazeSearch()">✕ Cancel</button>
+        </div>
+
+        <!-- Beam Blaze: no devices found after timeout -->
+        <div id="offline-step-blaze-notfound" style="display:none">
+          <div class="offline-notfound-wrap">
+            <div class="offline-notfound-icon">🔥</div>
+            <div class="offline-notfound-title">No nearby Android device found</div>
+            <div class="offline-notfound-hint">
+              Make sure the other person has <strong>Beam open</strong> on their
+              Android phone and has tapped <strong>Receive</strong>.<br><br>
+              Both devices must be within <strong>Bluetooth range (~10 m)</strong>.
+              For faster transfer, keep WiFi on (no need to connect to anything).
+            </div>
+            <button class="offline-retry-scan-btn" onclick="retryBlazeSearch()">
+              🔥 Retry Beam Blaze
+            </button>
+            <button class="offline-cancel-btn" style="margin-top:8px"
+                    onclick="resetOfflineMode()">Back</button>
           </div>
         </div>
 
@@ -4450,6 +4486,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     const bBtn = document.getElementById('beam-blaze-launch-btn');
     if (bBtn) bBtn.style.display = 'none';
     document.getElementById('blaze-incoming-overlay').style.display = 'none';
+    stopBlazeCountdown();
     blazeDevices = {};
     blazeConnected = null;
     blazePendingEndpoint = null;
@@ -4507,11 +4544,14 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // ── Beam Blaze — Nearby Connections UI logic ──────────────────────────────
 
   const BLAZE_STEPS = ['conn','notfound','scanning','devices','waiting','transfer',
-                       'success','fail','blaze-perm','blaze-scan','blaze-devices'];
+                       'success','fail','blaze-perm','blaze-scan','blaze-notfound','blaze-devices'];
 
-  let blazeDevices = {};    // endpointId → name
-  let blazeConnected = null; // currently connected endpointId
-  let blazePendingEndpoint = null; // incoming connection request
+  let blazeDevices         = {};    // endpointId → name
+  let blazeConnected       = null;  // currently connected endpointId
+  let blazePendingEndpoint = null;  // incoming connection request
+  let blazeScanTimer       = null;  // 60-second auto-stop timer
+  let blazeCountdownTimer  = null;  // per-second countdown display
+  let blazeSecondsLeft     = 60;
 
   function showBlazeStep(name) {
     // Use the same STEPS array but also handle blaze-specific steps
@@ -4539,6 +4579,49 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }
   };
 
+  // ── Blaze scan timeout + countdown ────────────────────────────────────────
+
+  function startBlazeCountdown() {
+    stopBlazeCountdown();
+    blazeSecondsLeft = 60;
+    const timerEl = document.getElementById('blaze-scan-timer');
+    if (timerEl) timerEl.textContent = blazeSecondsLeft + 's';
+
+    blazeCountdownTimer = setInterval(() => {
+      blazeSecondsLeft--;
+      if (timerEl) timerEl.textContent = blazeSecondsLeft + 's';
+      if (blazeSecondsLeft <= 0) stopBlazeCountdown();
+    }, 1000);
+
+    blazeScanTimer = setTimeout(() => {
+      // Auto-stop after 60 seconds if no device found
+      if (Object.keys(blazeDevices).length === 0) {
+        stopBlazeCountdown();
+        if (window.BeamNative) try { window.BeamNative.stopBeamBlaze(); } catch(_) {}
+        showBlazeStep('blaze-notfound');
+      }
+    }, 60000);
+  }
+
+  function stopBlazeCountdown() {
+    if (blazeCountdownTimer) { clearInterval(blazeCountdownTimer); blazeCountdownTimer = null; }
+    if (blazeScanTimer)      { clearTimeout(blazeScanTimer);       blazeScanTimer      = null; }
+  }
+
+  window.cancelBlazeSearch = function() {
+    stopBlazeCountdown();
+    if (window.BeamNative) try { window.BeamNative.stopBeamBlaze(); } catch(_) {}
+    resetOfflineMode();
+  };
+
+  window.retryBlazeSearch = function() {
+    showBlazeStep('blaze-scan');
+    blazeDevices = {};
+    if (window.BeamNative) {
+      try { window.BeamNative.startBeamBlaze(); } catch(_) {}
+    }
+  };
+
   window.acceptBlazeIncoming = function() {
     const ep = blazePendingEndpoint;
     blazePendingEndpoint = null;
@@ -4558,6 +4641,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   window.onBlazeStarted = function() {
     blazeDevices = {};
     showBlazeStep('blaze-scan');
+    startBlazeCountdown();
   };
 
   window.onBlazePermissionDenied = function() {
@@ -4569,6 +4653,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   };
 
   window.onBlazeDeviceFound = function(endpointId, name) {
+    stopBlazeCountdown();   // found — cancel the timeout
     blazeDevices[endpointId] = name;
     renderBlazeDevices();
     showBlazeStep('blaze-devices');
