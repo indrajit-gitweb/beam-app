@@ -2344,6 +2344,18 @@ function markQueueItemState(index, state) {
 const BEAM_WORKER_URL = 'https://beam-worker.indrajit.workers.dev';
 const BEAM_WORKER_CONFIGURED = !BEAM_WORKER_URL.includes('YOUR-SUBDOMAIN');
 
+// When running in the Electron desktop app (file:// protocol), location.origin
+// returns the string "null" — using it in a share URL produces something like
+// "null/Users/.../index.html?c=..." which Android Chrome interprets as the
+// domain "null" (a real GoDaddy-parked domain). Always use the hosted web URL.
+const BEAM_WEB_URL = 'https://indrajit-gitweb.github.io/beam-app/';
+function getShareBaseUrl() {
+  if (window.location.protocol === 'file:' || window.location.origin === 'null')
+    return BEAM_WEB_URL;
+  // Hosted page: use actual origin + pathname (strip query/hash)
+  return window.location.origin + window.location.pathname;
+}
+
 let currentMode = 'p2p'; // 'p2p' | 'cloud'
 let selectedExpiryMinutes = 30;
 let userChangedExpiry = false;
@@ -2535,7 +2547,7 @@ async function startCloudUpload() {
   // All files uploaded — encode cloud link (v:2 uses Worker download tokens)
   const expiresAt  = Date.now() + selectedExpiryMinutes * 60 * 1000;
   const cloudParam = encodeCloudParam({ v: 2, files: uploadedFiles, e: expiresAt });
-  const cloudUrl   = `${location.origin}${location.pathname}?c=${cloudParam}`;
+  const cloudUrl   = getShareBaseUrl() + '?c=' + cloudParam;
 
   showCloudLink(cloudUrl, expiresAt);
 }
