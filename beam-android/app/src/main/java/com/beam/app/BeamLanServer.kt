@@ -71,6 +71,9 @@ class BeamLanServer(
             r.addHeader("Access-Control-Allow-Headers",
                 "Content-Type,X-Filename,X-Filesize,X-Filetype,X-Target-Peer," +
                 "X-From-Peer,X-From-Name,X-File-Index,X-Total-Files,X-Expiry-Minutes")
+            // Required for Chrome's Private Network Access policy:
+            // allows file:// or public origins to fetch local network IPs
+            r.addHeader("Access-Control-Allow-Private-Network", "true")
             return r
         }
 

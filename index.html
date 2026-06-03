@@ -1076,24 +1076,7 @@
             <div class="offline-device-list-title">Nearby devices</div>
             <div id="offline-device-items"></div>
 
-            <!-- OR: QR code for browser-only access -->
-            <div id="offline-qr-section" style="display:none;margin-top:16px;">
-              <div style="display:flex;align-items:center;gap:10px;margin:12px 0 10px;color:var(--muted);font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;">
-                <div style="flex:1;height:1px;background:var(--border)"></div>
-                OR — no Beam app?
-                <div style="flex:1;height:1px;background:var(--border)"></div>
-              </div>
-              <div class="offline-android-box">
-                <div class="offline-android-title">📱 Scan to join from any browser</div>
-                <div class="offline-android-inner">
-                  <div class="offline-qr-wrap" id="offline-device-qr"></div>
-                  <div class="offline-android-info">
-                    <div class="offline-android-url" id="offline-device-url">—</div>
-                    <div class="offline-android-hint">Open this URL on any device — Mac, iPhone, Windows, Linux — no app install needed. Works in Safari, Chrome, any browser.</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <!-- QR shown in the persistent #offline-android-box at bottom -->
           </div>
         </div>
 
@@ -4110,24 +4093,32 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 
     console.log(`[subnet] Scanning ${subnet}.1-254 for Beam devices…`);
 
-    // Scan all 254 addresses in parallel with 600ms timeout each
-    const probes = [];
-    for (let i = 1; i <= 254; i++) {
-      if (i.toString() === myOctet) continue;
-      probes.push(probeBeamDevice(`${subnet}.${i}`));
+    // Scan in batches of 20 to avoid memory overload on mobile
+    const BATCH = 20;
+    for (let i = 1; i <= 254; i += BATCH) {
+      const batch = [];
+      for (let j = i; j < i + BATCH && j <= 254; j++) {
+        if (j.toString() === myOctet) continue;
+        batch.push(probeBeamDevice(`${subnet}.${j}`));
+      }
+      await Promise.allSettled(batch);
     }
-    await Promise.allSettled(probes);
     console.log('[subnet] Scan complete');
   }
 
   async function probeBeamDevice(ip) {
     const url = `http://${ip}:${LAN_PORT}/health`;
     try {
+      // Use manual AbortController — AbortSignal.timeout() not in older WebView
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 600);
-      const res   = await fetch(url, { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (!res.ok) return;
+      const timer = setTimeout(() => ctrl.abort(), 800);
+      let res;
+      try {
+        res = await fetch(url, { signal: ctrl.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!res || !res.ok) return;
       const h = await res.json();
       if (!h.ok) return;
 
@@ -4179,6 +4170,9 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     const urlEl  = document.getElementById('offline-android-url');
     const qrWrap = document.getElementById('offline-qr-wrap');
     if (!box || !urlEl || !qrWrap) return;
+    // Only generate once — clear flag on full reset via resetOfflineMode
+    if (box.dataset.qrRendered) return;
+    box.dataset.qrRendered = '1';
 
     function renderQR(url) {
       if (!url) return;
@@ -4524,6 +4518,9 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     dataChannel   = null;
     selectedDevice = null;
     window._pendingOfflineDetect = false;
+    // Clear QR rendered flag so it regenerates on next open
+    const qrBox = document.getElementById('offline-android-box');
+    if (qrBox) { delete qrBox.dataset.qrRendered; qrBox.style.display = 'none'; }
     const fillEl  = document.getElementById('offline-progress-fill');
     const pctEl   = document.getElementById('offline-progress-pct');
     const labelEl = document.getElementById('offline-progress-label');
