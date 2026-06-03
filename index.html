@@ -2725,7 +2725,11 @@ function handleCloudLinkParam(param) {
     //     The anchor click triggers a native browser download — no JS memory buffering,
     //     works for files of any size (1 byte to 20 GB+).
     // v1 (legacy): f.l is already a direct cloud URL.
-    function triggerDownload(f, manual = false) {
+    // Download a single file via fetch → blob → createObjectURL.
+    // This avoids Chrome's "block multiple automatic downloads" restriction
+    // that silently drops all but the first when using a.click() with href.
+    // Returns a Promise that resolves when the file has been saved.
+    async function triggerDownload(f, manual = false) {
       if (cancelledFiles.has(f.l)) {
         if (manual) setStatus(recvStatus, `⊘ "${f.n}" is cancelled — click ↩ to restore it first.`, 'warn');
         return;
@@ -2735,25 +2739,45 @@ function handleCloudLinkParam(param) {
         return;
       }
       const btn = document.getElementById(`dl-btn-${f.l}`);
-      if (btn) { btn.textContent = '⬇️ Downloading…'; btn.disabled = true; }
+      if (btn) { btn.textContent = '⬇️ Fetching…'; btn.disabled = true; }
+      setStatus(recvStatus, `⬇️ Fetching "${f.n}"…`, 'info');
 
-      // Use an anchor with `download` attribute so the browser saves to disk
-      // without loading the whole file into JS memory.
-      const a = Object.assign(document.createElement('a'), {
-        href:     `${BEAM_WORKER_URL}/download/${f.l}`,
-        download: f.n,
-        target:   '_blank',
-        rel:      'noopener noreferrer',
-      });
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      try {
+        const resp = await fetch(`${BEAM_WORKER_URL}/download/${f.l}`);
+        if (!resp.ok) {
+          throw new Error(resp.status === 410 ? 'Link expired or already downloaded' : `Server error ${resp.status}`);
+        }
 
-      setStatus(recvStatus, `⬇️ Downloading "${f.n}" — your browser will prompt you to save. To stop, cancel in your browser's download bar.`, 'info');
+        // Stream into a Blob — shows real progress for large files
+        const contentLen = parseInt(resp.headers.get('content-length') || '0', 10);
+        const reader = resp.body.getReader();
+        const chunks = [];
+        let received = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          received += value.length;
+          if (contentLen > 0 && btn) {
+            const pct = Math.round(received * 100 / contentLen);
+            btn.textContent = `⬇️ ${pct}%`;
+          }
+        }
 
-      setTimeout(() => {
-        if (btn) { btn.textContent = '✓ Started'; btn.disabled = false; }
-      }, 2500);
+        const blob = new Blob(chunks, { type: resp.headers.get('content-type') || 'application/octet-stream' });
+        const url  = URL.createObjectURL(blob);
+        const a    = Object.assign(document.createElement('a'), { href: url, download: f.n });
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+
+        if (btn) { btn.textContent = '✓ Saved'; btn.disabled = false; }
+        setStatus(recvStatus, `✅ "${f.n}" saved to Downloads.`, 'success');
+      } catch (err) {
+        if (btn) { btn.textContent = '✗ Failed'; btn.disabled = false; }
+        setStatus(recvStatus, `❌ "${f.n}" — ${err.message}`, 'error');
+      }
     }
 
     function updateCancelAllBtn() {
@@ -2810,13 +2834,24 @@ function handleCloudLinkParam(param) {
     cloudExpiryInfo.textContent = `⏱ Link expires in ${mins} minute${mins !== 1 ? 's' : ''}. File is deleted from cloud immediately after first download.`;
     cloudExpiryInfo.style.display = 'block';
 
-    cloudRecvAllBtn.addEventListener('click', () => {
+    cloudRecvAllBtn.addEventListener('click', async () => {
       const pending = cloudFiles.filter(f => !cancelledFiles.has(f.l));
       if (pending.length === 0) {
         setStatus(recvStatus, '⊘ All files are cancelled. Click ↩ on a file to restore it.', 'warn');
         return;
       }
-      pending.forEach((f, i) => setTimeout(() => triggerDownload(f), i * 800));
+      cloudRecvAllBtn.disabled = true;
+      cloudRecvAllBtn.textContent = '⬇️ Downloading…';
+      // Sequential — await each before starting the next.
+      // This ensures every file is saved before the next fetch begins,
+      // avoiding Chrome's "block multiple automatic downloads" restriction.
+      for (const f of pending) {
+        await triggerDownload(f);
+      }
+      cloudRecvAllBtn.disabled = false;
+      cloudRecvAllBtn.innerHTML = '<svg class="icon" width="14" height="14"><use href="#ico-recv"/></svg> Download All';
+      if (pending.length > 1)
+        setStatus(recvStatus, `✅ All ${pending.length} files downloaded.`, 'success');
     });
 
     cloudRecvCancelAllBtn.addEventListener('click', () => {
