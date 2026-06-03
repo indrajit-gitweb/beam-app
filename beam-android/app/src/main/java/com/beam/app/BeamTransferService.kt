@@ -1,16 +1,18 @@
 package com.beam.app
 
 import android.app.Service
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Environment
 import android.os.IBinder
 import android.os.PowerManager
-import android.util.Base64
+import android.provider.OpenableColumns
 import android.util.Log
 import kotlinx.coroutines.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URLEncoder
@@ -18,76 +20,204 @@ import java.util.concurrent.TimeUnit
 
 class BeamTransferService : Service() {
 
-    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var wakeLock: PowerManager.WakeLock? = null
-    private val httpClient = OkHttpClient.Builder()
-        .readTimeout(5, TimeUnit.MINUTES)
-        .writeTimeout(5, TimeUnit.MINUTES)
+
+    private val http = OkHttpClient.Builder()
+        .readTimeout(10, TimeUnit.MINUTES)
+        .writeTimeout(10, TimeUnit.MINUTES)
         .connectTimeout(30, TimeUnit.SECONDS)
         .build()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: return START_NOT_STICKY
 
-        // Show foreground notification immediately (required for Android 8+)
-        val notifTitle = when (action) {
-            ACTION_START_DOWNLOAD -> "Beam — Receiving ${intent.getStringExtra("filename") ?: "file"}"
-            ACTION_START_UPLOAD   -> "Beam — Sending ${intent.getStringExtra("filename") ?: "file"}"
+        val label = when (action) {
+            ACTION_LOCAL_SEND_UPLOAD -> "Beam — Sending…"
+            ACTION_START_DOWNLOAD    -> "Beam — Receiving ${intent.getStringExtra("filename") ?: "file"}"
             else -> "Beam"
         }
-        startForeground(NOTIFICATION_ID, BeamNotificationHelper.buildProgress(this, notifTitle, 0))
+        startForeground(NOTIFICATION_ID,
+            BeamNotificationHelper.buildProgress(this, label, 0))
 
-        // Acquire wake lock — keeps CPU running when screen is off
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         @Suppress("WakelockTimeout")
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Beam::TransferWakeLock").apply {
-            acquire(10 * 60 * 1000L) // max 10 minutes
-        }
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Beam::TransferWakeLock")
+            .apply { acquire(30 * 60 * 1000L) }   // 30 min max
 
         when (action) {
-            ACTION_START_DOWNLOAD -> handleDownload(intent)
-            ACTION_START_UPLOAD   -> handleUpload(intent)
+            ACTION_LOCAL_SEND_UPLOAD -> handleLocalSendUpload(intent)
+            ACTION_START_DOWNLOAD    -> handleDownload(intent)
         }
-
         return START_NOT_STICKY
     }
 
-    // ── Download (receive file from LAN server) ────────────────────────────────
+    // ── LocalSend-style upload: announce → poll acceptance → stream files ──────
+    //
+    // Works entirely in native code — screen can turn off after the user taps
+    // "Send" and this service will keep running.
 
-    private fun handleDownload(intent: Intent) {
-        val fromName    = intent.getStringExtra("fromName")    ?: "sender"
-        val filename    = intent.getStringExtra("filename")    ?: "beam-file"
-        val downloadUrl = intent.getStringExtra("downloadUrl") ?: return
+    private fun handleLocalSendUpload(intent: Intent) {
+        val receiverIp  = intent.getStringExtra("receiverIp")  ?: return
+        val uriStrings  = intent.getStringArrayListExtra("uriStrings")?.toTypedArray() ?: return
+        val fromName    = intent.getStringExtra("fromName")    ?: android.os.Build.MODEL
 
-        serviceScope.launch {
+        scope.launch {
             try {
-                val request  = Request.Builder().url(downloadUrl).build()
-                val response = httpClient.newCall(request).execute()
+                // ── 1. Resolve file metadata from content URIs ────────────────
+                data class FileEntry(val uri: Uri, val name: String, val size: Long, val mime: String)
 
-                if (!response.isSuccessful) {
-                    broadcastFailure("Server returned ${response.code}")
+                val files = uriStrings.mapNotNull { uriString ->
+                    val uri  = Uri.parse(uriString)
+                    val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+                    var name = "beam-file"
+                    var size = 0L
+                    contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val ni = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            val si = cursor.getColumnIndex(OpenableColumns.SIZE)
+                            if (ni >= 0) name = cursor.getString(ni) ?: name
+                            if (si >= 0) size = cursor.getLong(si)
+                        }
+                    }
+                    FileEntry(uri, name, size, mime)
+                }
+
+                if (files.isEmpty()) {
+                    broadcastFailure("No files to send")
                     return@launch
                 }
 
-                val body = response.body ?: run { broadcastFailure("Empty response"); return@launch }
-                val totalBytes = body.contentLength()
-                val savedFile  = saveToDownloads(filename, body, totalBytes)
+                // ── 2. POST /send-request to announce ─────────────────────────
+                val announceBody = buildString {
+                    append("""{"senderName":${jsonStr(fromName)},"files":[""")
+                    files.forEachIndexed { i, f ->
+                        if (i > 0) append(",")
+                        append("""{"name":${jsonStr(f.name)},"size":${f.size},"type":${jsonStr(f.mime)}}""")
+                    }
+                    append("]}")
+                }
 
-                broadcastComplete(filename, savedFile.absolutePath, fromName)
+                val announceResp = http.newCall(
+                    Request.Builder()
+                        .url("http://$receiverIp:${BeamLanServer.PORT}/send-request")
+                        .post(RequestBody.create("application/json".toMediaType(), announceBody))
+                        .build()
+                ).execute()
+
+                if (!announceResp.isSuccessful) {
+                    broadcastFailure("Receiver not responding (${announceResp.code})")
+                    return@launch
+                }
+
+                val annJson   = org.json.JSONObject(announceResp.body?.string() ?: "{}")
+                val sessionId = annJson.optString("sessionId", "")
+                if (sessionId.isEmpty()) {
+                    broadcastFailure("No session ID from receiver")
+                    return@launch
+                }
+
+                Log.d(TAG, "Session $sessionId — waiting for acceptance…")
+                BeamNotificationHelper.updateProgress(this@BeamTransferService, "Waiting for acceptance…", 0)
+
+                // ── 3. Poll /status until accepted or declined (max 90 s) ──────
+                var accepted = false
+                for (tick in 0..180) {
+                    val statusResp = try {
+                        http.newCall(
+                            Request.Builder()
+                                .url("http://$receiverIp:${BeamLanServer.PORT}/status/$sessionId")
+                                .build()
+                        ).execute()
+                    } catch (_: Exception) { delay(500); continue }
+
+                    val status = try {
+                        org.json.JSONObject(statusResp.body?.string() ?: "{}").optString("status")
+                    } catch (_: Exception) { "pending" }
+
+                    when (status) {
+                        "accepted" -> { accepted = true; break }
+                        "declined" -> {
+                            broadcastFailure("Transfer declined by receiver")
+                            return@launch
+                        }
+                    }
+                    delay(500)
+                }
+
+                if (!accepted) {
+                    broadcastFailure("No response from receiver (timeout)")
+                    return@launch
+                }
+
+                Log.d(TAG, "Accepted! Uploading ${files.size} file(s)…")
+
+                // ── 4. Stream each file to /upload ─────────────────────────────
+                files.forEachIndexed { idx, file ->
+                    BeamNotificationHelper.updateProgress(
+                        this@BeamTransferService,
+                        "Sending ${file.name} (${idx + 1}/${files.size})…", 0
+                    )
+
+                    val uri  = file.uri
+                    val mime = file.mime
+                    val size = file.size
+
+                    val reqBody = object : RequestBody() {
+                        override fun contentType() = mime.toMediaType()
+                        override fun contentLength() = size
+                        override fun writeTo(sink: BufferedSink) {
+                            val input = contentResolver.openInputStream(uri) ?: return
+                            val buf = ByteArray(65_536)
+                            var n: Int
+                            var sent = 0L
+                            try {
+                                while (input.read(buf).also { n = it } != -1) {
+                                    sink.write(buf, 0, n)
+                                    sent += n
+                                    val pct = if (size > 0) (sent * 100 / size).toInt() else 0
+                                    broadcastProgress(pct, file.name)
+                                    BeamNotificationHelper.updateProgress(
+                                        this@BeamTransferService, "Sending ${file.name}…", pct
+                                    )
+                                }
+                            } finally { input.close() }
+                        }
+                    }
+
+                    val uploadResp = http.newCall(
+                        Request.Builder()
+                            .url("http://$receiverIp:${BeamLanServer.PORT}/upload")
+                            .addHeader("X-Filename",    URLEncoder.encode(file.name, "UTF-8"))
+                            .addHeader("X-Filesize",    file.size.toString())
+                            .addHeader("X-Filetype",    mime)
+                            .addHeader("X-From-Name",   URLEncoder.encode(fromName, "UTF-8"))
+                            .addHeader("X-Session-Id",  sessionId)
+                            .addHeader("X-File-Index",  idx.toString())
+                            .addHeader("X-Total-Files", files.size.toString())
+                            .post(reqBody)
+                            .build()
+                    ).execute()
+
+                    if (!uploadResp.isSuccessful) {
+                        broadcastFailure("Upload failed for ${file.name}: ${uploadResp.code}")
+                        return@launch
+                    }
+                    Log.d(TAG, "Sent: ${file.name}")
+                }
+
+                // ── 5. All done ────────────────────────────────────────────────
+                broadcastComplete(files.joinToString(", ") { it.name }, "", fromName)
                 BeamNotificationHelper.showComplete(
                     this@BeamTransferService,
-                    "Received $filename",
-                    "From $fromName — saved to Downloads"
+                    "Sent ${files.size} file(s)",
+                    "Delivered to $receiverIp"
                 )
 
             } catch (e: Exception) {
-                Log.e(TAG, "Download failed", e)
-                broadcastFailure(e.message ?: "Download failed")
-                BeamNotificationHelper.showError(
-                    this@BeamTransferService,
-                    "Transfer failed",
-                    e.message ?: "Download error"
-                )
+                Log.e(TAG, "Local send failed", e)
+                broadcastFailure(e.message ?: "Upload error")
+                BeamNotificationHelper.showError(this@BeamTransferService, "Send failed", e.message ?: "")
             } finally {
                 releaseWakeLock()
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -96,61 +226,26 @@ class BeamTransferService : Service() {
         }
     }
 
-    // ── Upload (send file to LAN server) ──────────────────────────────────────
+    // ── Download (receive file from another device's /upload endpoint) ─────────
 
-    private fun handleUpload(intent: Intent) {
-        val fileBase64   = intent.getStringExtra("fileBase64")   ?: return
-        val filename     = intent.getStringExtra("filename")     ?: "beam-file"
-        val mimeType     = intent.getStringExtra("mimeType")     ?: "application/octet-stream"
-        val filesize     = intent.getLongExtra("filesize", 0L)
-        val targetPeerId = intent.getStringExtra("targetPeerId") ?: ""
-        val fromPeerId   = intent.getStringExtra("fromPeerId")   ?: ""
-        val fromName     = intent.getStringExtra("fromName")     ?: android.os.Build.MODEL
-        val uploadUrl    = intent.getStringExtra("uploadUrl")    ?: return
+    private fun handleDownload(intent: Intent) {
+        val fromName    = intent.getStringExtra("fromName")    ?: "sender"
+        val filename    = intent.getStringExtra("filename")    ?: "beam-file"
+        val downloadUrl = intent.getStringExtra("downloadUrl") ?: return
 
-        serviceScope.launch {
+        scope.launch {
             try {
-                val fileBytes = Base64.decode(fileBase64, Base64.DEFAULT)
-                val body      = fileBytes.toRequestBody(mimeType.toMediaType())
-
-                val request = Request.Builder()
-                    .url(uploadUrl)
-                    .addHeader("X-Filename",    URLEncoder.encode(filename, "UTF-8"))
-                    .addHeader("X-Filesize",    filesize.toString())
-                    .addHeader("X-Filetype",    mimeType)
-                    .addHeader("X-Target-Peer", targetPeerId)
-                    .addHeader("X-From-Peer",   fromPeerId)
-                    .addHeader("X-From-Name",   URLEncoder.encode(fromName, "UTF-8"))
-                    .addHeader("Content-Type",  "application/octet-stream")
-                    .post(body)
-                    .build()
-
-                val response = httpClient.newCall(request).execute()
-
-                if (response.isSuccessful) {
-                    broadcastComplete(filename, "", fromName)
-                    BeamNotificationHelper.showComplete(
-                        this@BeamTransferService,
-                        "Sent $filename",
-                        "Delivered successfully"
-                    )
-                } else {
-                    broadcastFailure("Server error ${response.code}")
-                    BeamNotificationHelper.showError(
-                        this@BeamTransferService,
-                        "Send failed",
-                        "Server error ${response.code}"
-                    )
-                }
-
+                val resp = http.newCall(Request.Builder().url(downloadUrl).build()).execute()
+                if (!resp.isSuccessful) { broadcastFailure("Server returned ${resp.code}"); return@launch }
+                val body = resp.body ?: run { broadcastFailure("Empty response"); return@launch }
+                val saved = saveToDownloads(filename, body, body.contentLength())
+                broadcastComplete(filename, saved.absolutePath, fromName)
+                BeamNotificationHelper.showComplete(this@BeamTransferService,
+                    "Received $filename", "From $fromName — saved to Downloads")
             } catch (e: Exception) {
-                Log.e(TAG, "Upload failed", e)
-                broadcastFailure(e.message ?: "Upload failed")
-                BeamNotificationHelper.showError(
-                    this@BeamTransferService,
-                    "Send failed",
-                    e.message ?: "Upload error"
-                )
+                Log.e(TAG, "Download failed", e)
+                broadcastFailure(e.message ?: "Download failed")
+                BeamNotificationHelper.showError(this@BeamTransferService, "Receive failed", e.message ?: "")
             } finally {
                 releaseWakeLock()
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -162,87 +257,74 @@ class BeamTransferService : Service() {
     // ── File saving ────────────────────────────────────────────────────────────
 
     private fun saveToDownloads(filename: String, body: ResponseBody, totalBytes: Long): File {
-        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        val safeFilename = filename.replace(Regex("[/\\\\?%*:|\"<>]"), "_")
-        var destFile = File(downloadsDir, safeFilename)
-
-        // Avoid overwriting existing files
+        val dir  = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val safe = filename.replace(Regex("[/\\\\?%*:|\"<>]"), "_")
+        var dest = File(dir, safe)
         var i = 1
-        while (destFile.exists()) {
-            val ext  = if (safeFilename.contains('.')) ".${safeFilename.substringAfterLast('.')}" else ""
-            val base = if (safeFilename.contains('.')) safeFilename.substringBeforeLast('.') else safeFilename
-            destFile = File(downloadsDir, "${base}_($i)$ext")
-            i++
+        while (dest.exists()) {
+            val ext  = if (safe.contains('.')) ".${safe.substringAfterLast('.')}" else ""
+            val base = if (safe.contains('.')) safe.substringBeforeLast('.') else safe
+            dest = File(dir, "${base}_($i)$ext"); i++
         }
-
-        val inputStream  = body.byteStream()
-        val outputStream = FileOutputStream(destFile)
-        val buffer       = ByteArray(8192)
-        var bytesRead: Int
-        var totalRead    = 0L
-
+        val fos = FileOutputStream(dest)
+        val buf = ByteArray(65_536)
+        var read: Int; var total = 0L
+        val inp = body.byteStream()
         try {
-            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                outputStream.write(buffer, 0, bytesRead)
-                totalRead += bytesRead
-                if (totalBytes > 0) {
-                    val pct = (totalRead * 100 / totalBytes).toInt()
-                    broadcastProgress(pct, destFile.name)
-                    BeamNotificationHelper.updateProgress(this, "Receiving ${destFile.name}…", pct)
-                }
+            while (inp.read(buf).also { read = it } != -1) {
+                fos.write(buf, 0, read); total += read
+                if (totalBytes > 0) broadcastProgress((total * 100 / totalBytes).toInt(), dest.name)
             }
-        } finally {
-            outputStream.flush()
-            outputStream.close()
-            inputStream.close()
-        }
-
-        return destFile
+        } finally { fos.flush(); fos.close(); inp.close() }
+        return dest
     }
 
     // ── Broadcasts ────────────────────────────────────────────────────────────
 
-    private fun broadcastComplete(filename: String, savedPath: String, fromName: String) {
+    private fun broadcastComplete(filename: String, savedPath: String, fromName: String) =
         sendBroadcast(Intent(ACTION_TRANSFER_COMPLETE).apply {
             putExtra("filename",  filename)
             putExtra("savedPath", savedPath)
             putExtra("fromName",  fromName)
         })
-    }
 
-    private fun broadcastProgress(pct: Int, filename: String) {
+    internal fun broadcastProgress(pct: Int, filename: String) =
         sendBroadcast(Intent(ACTION_TRANSFER_PROGRESS).apply {
             putExtra("pct",      pct)
             putExtra("filename", filename)
         })
-    }
 
-    private fun broadcastFailure(error: String) {
-        sendBroadcast(Intent(ACTION_TRANSFER_FAILED).apply {
-            putExtra("error", error)
-        })
-    }
+    private fun broadcastFailure(error: String) =
+        sendBroadcast(Intent(ACTION_TRANSFER_FAILED).apply { putExtra("error", error) })
 
-    private fun releaseWakeLock() {
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wakeLock = null
-    }
+    private fun releaseWakeLock() { wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null }
 
     override fun onBind(intent: Intent?): IBinder? = null
-
-    override fun onDestroy() {
-        super.onDestroy()
-        serviceScope.cancel()
-        releaseWakeLock()
-    }
+    override fun onDestroy() { super.onDestroy(); scope.cancel(); releaseWakeLock() }
 
     companion object {
         const val TAG                      = "BeamTransferService"
         const val NOTIFICATION_ID          = 1001
+        const val ACTION_LOCAL_SEND_UPLOAD = "com.beam.app.LOCAL_SEND_UPLOAD"
         const val ACTION_START_DOWNLOAD    = "com.beam.app.START_DOWNLOAD"
-        const val ACTION_START_UPLOAD      = "com.beam.app.START_UPLOAD"
         const val ACTION_TRANSFER_COMPLETE = "com.beam.app.TRANSFER_COMPLETE"
         const val ACTION_TRANSFER_PROGRESS = "com.beam.app.TRANSFER_PROGRESS"
         const val ACTION_TRANSFER_FAILED   = "com.beam.app.TRANSFER_FAILED"
+
+        fun startUpload(context: Context, receiverIp: String, uris: List<Uri>, fromName: String) {
+            val intent = Intent(context, BeamTransferService::class.java).apply {
+                action = ACTION_LOCAL_SEND_UPLOAD
+                putExtra("receiverIp",  receiverIp)
+                putExtra("fromName",    fromName)
+                putStringArrayListExtra("uriStrings", ArrayList(uris.map { it.toString() }))
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
+                context.startForegroundService(intent)
+            else
+                context.startService(intent)
+        }
     }
+
+    private fun jsonStr(s: String): String =
+        "\"${s.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 }

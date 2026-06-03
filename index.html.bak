@@ -341,6 +341,11 @@
     .cfi-meta { font-size: .72rem; color: var(--muted); margin-top: 2px; }
     .cfi-download { display: flex; align-items: center; gap: 5px; padding: 6px 12px; background: var(--success); color: #fff; border-radius: 7px; text-decoration: none; font-size: .78rem; font-weight: 700; flex-shrink: 0; transition: opacity .15s, transform .1s; }
     .cfi-download:hover { opacity: .88; transform: translateY(-1px); }
+    .cfi-discard { display: flex; align-items: center; padding: 6px 10px; background: none; border: 1px solid rgba(239,68,68,.25); color: var(--error); border-radius: 7px; font-size: .75rem; font-weight: 700; cursor: pointer; flex-shrink: 0; transition: all .15s; }
+    .cfi-discard:hover { background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.5); }
+    #recv-clear-all-wrap { margin-top: 10px; display: none; }
+    #recv-clear-all-btn { width: 100%; padding: 10px; border-radius: var(--radius-sm); border: 1px solid rgba(239,68,68,.25); background: rgba(239,68,68,.06); color: var(--error); font-size: .84rem; font-weight: 700; cursor: pointer; transition: all .15s; }
+    #recv-clear-all-btn:hover { background: rgba(239,68,68,.14); border-color: rgba(239,68,68,.5); }
 
     /* ── Save All button (post-transfer) ── */
     #save-all-wrap { display: none; margin-top: 10px; }
@@ -604,6 +609,21 @@
     .mode-card.offline .mode-card-name { margin-bottom: 2px; }
     .mode-card.offline.active { border-color: #10b981; background: rgba(16,185,129,0.08); }
     .mode-card.offline.active .mode-card-name { color: #34d399; }
+    /* Disabled state — web browser users (strong visual) */
+    .mode-card.offline.unavailable {
+      opacity: .55; cursor: not-allowed;
+      border: 1.5px dashed rgba(239,68,68,.5) !important;
+      background: rgba(239,68,68,.04) !important;
+      position: relative;
+    }
+    .mode-card.offline.unavailable:hover { border-color: rgba(239,68,68,.7) !important; background: rgba(239,68,68,.06) !important; }
+    .mode-card.offline.unavailable .mode-card-name { color: var(--muted-2) !important; }
+    .mode-card.offline.unavailable .mode-card-icon svg { color: var(--muted) !important; }
+    /* App-required banner inside the card */
+    .offline-app-required-msg { width: 100%; margin-top: 6px; font-size: .71rem; color: rgba(239,68,68,.9); font-weight: 600; line-height: 1.4; display: none; }
+    .mode-card.offline.unavailable .offline-app-required-msg { display: block; }
+    /* "App only" red badge */
+    .offline-unavailable-tag { margin-left: auto; flex-shrink: 0; font-size: .66rem; font-weight: 700; padding: 3px 9px; border-radius: 99px; background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35); color: var(--error); white-space: nowrap; }
 
     /* ── Offline section (inside send panel) ── */
     #offline-section { margin-top: 18px; }
@@ -1021,10 +1041,17 @@
             <div class="mode-card-name">Cloud Transfer</div>
             <div class="mode-card-desc">Upload to cloud · Sender can close tab · Auto-expires</div>
           </div>
-          <div class="mode-card offline" id="mode-offline" role="button" tabindex="0" onclick="selectMode('offline')" onkeydown="if(event.key==='Enter')selectMode('offline')">
+          <div class="mode-card offline" id="mode-offline" role="button" tabindex="0" onclick="selectMode('offline')" onkeydown="if(event.key==='Enter')selectMode('offline')" style="flex-wrap:wrap;">
             <div class="mode-card-icon"><svg class="icon" width="22" height="22"><use href="#ico-wifi"/></svg></div>
-            <div class="mode-card-name">Offline</div>
-            <div class="mode-card-desc">Same WiFi or Bluetooth · No internet needed · Local devices</div>
+            <div style="flex:1;min-width:0;">
+              <div class="mode-card-name">Offline</div>
+              <div class="mode-card-desc">Same WiFi or Bluetooth · No internet needed · Local devices</div>
+            </div>
+            <span class="offline-unavailable-tag" id="offline-app-tag" style="display:none">App only</span>
+            <!-- Message shown only when unavailable (browser users) -->
+            <div class="offline-app-required-msg" id="offline-app-required-msg">
+              ⚠️ Not available in browser — requires the Beam desktop or Android app. Use P2P or Cloud instead.
+            </div>
           </div>
         </div>
       </div>
@@ -1058,6 +1085,20 @@
               Make sure the <strong>Beam desktop app</strong> is open on a Mac, Windows, or Linux device on the same WiFi network, then try again.
             </div>
             <button class="offline-retry-scan-btn" onclick="resetOfflineMode()">🔄 Try again</button>
+            <!-- Scan QR code from desktop app (Android only) -->
+            <div id="offline-scan-qr-btn-wrap" style="display:none;margin-top:12px;">
+              <button class="offline-retry-scan-btn" style="background:rgba(99,102,241,.1);border-color:rgba(99,102,241,.3);color:var(--accent-2);" onclick="beamScanQr()">
+                📷 Scan QR from desktop app
+              </button>
+            </div>
+            <!-- Manual IP fallback -->
+            <div class="offline-manual-ip-wrap">
+              <div class="offline-manual-ip-label">Or enter the desktop app IP manually:</div>
+              <div class="offline-manual-ip-row">
+                <input type="text" id="offline-manual-ip" placeholder="192.168.x.x" inputmode="decimal" />
+                <button class="offline-manual-connect-btn" onclick="connectManualIp()">Connect</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1076,7 +1117,24 @@
             <div class="offline-device-list-title">Nearby devices</div>
             <div id="offline-device-items"></div>
 
-            <!-- QR shown in the persistent #offline-android-box at bottom -->
+            <!-- OR: QR code for browser-only access -->
+            <div id="offline-qr-section" style="display:none;margin-top:16px;">
+              <div style="display:flex;align-items:center;gap:10px;margin:12px 0 10px;color:var(--muted);font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;">
+                <div style="flex:1;height:1px;background:var(--border)"></div>
+                OR — no Beam app?
+                <div style="flex:1;height:1px;background:var(--border)"></div>
+              </div>
+              <div class="offline-android-box">
+                <div class="offline-android-title">📱 Scan to join from any browser</div>
+                <div class="offline-android-inner">
+                  <div class="offline-qr-wrap" id="offline-device-qr"></div>
+                  <div class="offline-android-info">
+                    <div class="offline-android-url" id="offline-device-url">—</div>
+                    <div class="offline-android-hint">Open this URL on any device — Mac, iPhone, Windows, Linux — no app install needed. Works in Safari, Chrome, any browser.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1202,19 +1260,6 @@
           <div id="peer-code" aria-live="polite">——————</div>
           <button class="copy-btn" id="copy-link-btn" aria-label="Copy shareable link">Copy link</button>
         </div>
-        <!-- QR code — receiver scans with phone camera, opens Beam in browser, auto-connects -->
-        <div id="p2p-qr-wrap" style="display:none;margin-top:16px;text-align:center;">
-          <p style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;">
-            📷 Or scan to connect instantly — no app needed
-          </p>
-          <div style="display:inline-flex;align-items:center;gap:16px;background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--radius-sm);padding:14px 18px;">
-            <div id="p2p-qr-code" style="background:#fff;border-radius:6px;padding:6px;width:90px;height:90px;display:flex;align-items:center;justify-content:center;flex-shrink:0;"></div>
-            <div style="text-align:left;">
-              <div style="font-size:.78rem;font-weight:700;color:var(--text);margin-bottom:4px;">Scan with phone camera</div>
-              <div style="font-size:.72rem;color:var(--muted-2);line-height:1.5;">Opens Beam in browser<br>Auto-connects to this sender<br>No app install needed ✅</div>
-            </div>
-          </div>
-        </div>
         <!-- Keep-open warning -->
         <div class="keep-open-note" id="keep-open-note">
           <span class="kon-icon"><svg class="icon" width="16" height="16"><use href="#ico-warn"/></svg></span>
@@ -1307,6 +1352,11 @@
       <!-- Save All (post-transfer, shown when >1 file received) -->
       <div id="save-all-wrap">
         <button id="save-all-btn">💾 Save All to Device</button>
+      </div>
+
+      <!-- Clear All — removes all received files from RAM/UI -->
+      <div id="recv-clear-all-wrap">
+        <button id="recv-clear-all-btn">🗑 Clear all received files</button>
       </div>
 
       <!-- Current incoming file card -->
@@ -1566,6 +1616,15 @@
 
     <!-- Offline steps -->
     <div class="hiw-mode" id="hiw-offline">
+      <!-- Warning banner — shown only in browser, hidden in app -->
+      <div id="hiw-offline-browser-warning" style="display:none;margin-bottom:18px;padding:14px 18px;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.25);border-radius:var(--radius-sm);">
+        <p style="font-size:.82rem;font-weight:700;color:var(--error);margin-bottom:5px;">⚠️ Offline mode is not available in the browser</p>
+        <p style="font-size:.76rem;color:var(--muted-2);line-height:1.6;">
+          This feature requires the <strong style="color:var(--text)">Beam desktop app</strong> (Mac / Windows / Linux) or the <strong style="color:var(--text)">Android app</strong> to run a local server on your device.<br>
+          In the browser, use <strong style="color:var(--accent-2)">P2P Direct</strong> or <strong style="color:#38bdf8">Cloud Transfer</strong> instead.
+          <a href="https://github.com/indrajit-gitweb/beam-app/actions" target="_blank" rel="noopener" style="color:#34d399;margin-left:6px;font-weight:700;">↓ Download app</a>
+        </p>
+      </div>
       <div class="how-grid">
         <div class="how-col offline-send-col">
           <div class="how-col-title"><svg class="icon" width="14" height="14"><use href="#ico-send"/></svg> Send Files</div>
@@ -2143,7 +2202,8 @@ function addCompletedFileCard(meta, blob, skipped = false) {
 
   if (!skipped && blob) {
     const objUrl = URL.createObjectURL(blob);
-    receivedBlobLinks.push({ name: meta.name, blob });
+    const blobEntry = { name: meta.name, blob, objUrl };
+    receivedBlobLinks.push(blobEntry);
 
     const dl = document.createElement('a');
     dl.className = 'cfi-download';
@@ -2151,6 +2211,29 @@ function addCompletedFileCard(meta, blob, skipped = false) {
     dl.download = meta.name;
     dl.innerHTML = '⬇ Download';
     item.appendChild(dl);
+
+    // Discard button — revokes blob URL, frees RAM, removes card
+    const discard = document.createElement('button');
+    discard.className = 'cfi-discard';
+    discard.title = 'Remove from memory — frees RAM';
+    discard.innerHTML = '✕';
+    discard.onclick = () => {
+      URL.revokeObjectURL(objUrl);
+      blobEntry.revoked = true;
+      // Remove from receivedBlobLinks
+      const idx = receivedBlobLinks.indexOf(blobEntry);
+      if (idx !== -1) receivedBlobLinks.splice(idx, 1);
+      // Remove the card with fade
+      item.style.transition = 'opacity .25s, transform .25s';
+      item.style.opacity = '0';
+      item.style.transform = 'translateX(20px)';
+      setTimeout(() => {
+        item.remove();
+        updateRecvClearAllVisibility();
+      }, 250);
+    };
+    item.appendChild(discard);
+
   } else if (skipped) {
     const tag = document.createElement('span');
     tag.style.cssText = 'font-size:.72rem;color:var(--muted);font-weight:600;';
@@ -2159,6 +2242,18 @@ function addCompletedFileCard(meta, blob, skipped = false) {
   }
 
   completedFiles.appendChild(item);
+  updateRecvClearAllVisibility();
+}
+
+function updateRecvClearAllVisibility() {
+  const wrap = document.getElementById('recv-clear-all-wrap');
+  if (!wrap) return;
+  // Show "Clear All" only when there are received (non-skipped) file cards
+  const hasFiles = receivedBlobLinks.length > 0;
+  wrap.style.display = hasFiles ? 'block' : 'none';
+  // Hide Save All if no files left
+  if (saveAllWrap) saveAllWrap.style.display =
+    receivedBlobLinks.length > 1 ? 'block' : 'none';
 }
 
 // ── Save All ──────────────────────────────────────────────────────────────────
@@ -2175,6 +2270,34 @@ saveAllBtn.addEventListener('click', () => {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }, i * 400); // stagger to avoid browser blocking
   });
+});
+
+// ── Clear All received files ──────────────────────────────────────────────────
+// Revokes all blob URLs (frees RAM), clears the completed files UI,
+// hides Save All and Clear All buttons. Receiver is ready for next transfer.
+
+document.getElementById('recv-clear-all-btn')?.addEventListener('click', () => {
+  // Revoke all blob URLs to free browser RAM
+  receivedBlobLinks.forEach(({ objUrl }) => {
+    if (objUrl) URL.revokeObjectURL(objUrl);
+  });
+  receivedBlobLinks = [];
+
+  // Clear all file cards with a fade
+  const cards = completedFiles.querySelectorAll('.completed-file-item');
+  cards.forEach((card, i) => {
+    card.style.transition = `opacity .2s ${i * 40}ms, transform .2s ${i * 40}ms`;
+    card.style.opacity    = '0';
+    card.style.transform  = 'translateY(-6px)';
+  });
+  setTimeout(() => {
+    completedFiles.innerHTML = '';
+    saveAllWrap.style.display = 'none';
+    document.getElementById('recv-clear-all-wrap').style.display = 'none';
+    // Reset status
+    setStatus(recvStatus, '🗑 All files cleared — ready for next transfer.', 'info');
+    setTimeout(() => setStatus(recvStatus, '', 'info'), 3000);
+  }, cards.length * 40 + 220);
 });
 
 // ── Sender: file queue management ─────────────────────────────────────────────
@@ -3325,692 +3448,2153 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   document.querySelectorAll('.scan-section').forEach(el => scanObs.observe(el));
 })();
 
-/* ── Offline Mode — LocalSend-style, pure HTTP ───────────────────────────────
- *
- * Architecture:
- *   Discovery : subnet scan  GET /hello → device appears in list
- *   Send      : POST /send-request → poll /status → upload stream → /upload
- *   Receive   : onNativeIncomingRequest (Android) OR poll /pending (Mac/browser)
- *   Background: BeamTransferService (Android) handles send/receive with WakeLock
- *               so transfers survive screen-off and app minimize on BOTH sides.
- *
- * No WebSocket needed for signaling — short HTTP polls only.
- * ───────────────────────────────────────────────────────────────────────────── */
+/* ── Offline Mode (Phase 2 — Real WebRTC LAN transfers) ─────────────────────── */
 
 (function initOfflineMode() {
-
-  // ── Platform detection (runtime check — not parse-time) ──────────────────
-  const IS_ELECTRON     = !!window.electronAPI;
-  const LAN_PORT        = 7777;
-
-  function isAndroid() { return !!(window.BeamNative || window.__BEAM_NATIVE_ANDROID__); }
 
   // ── DOM refs ──
   const modeOfflineCard    = document.getElementById('mode-offline');
   const offlineSection     = document.getElementById('offline-section');
   const offlineRecvSection = document.getElementById('offline-recv-section');
 
-  // ── Steps & state ─────────────────────────────────────────────────────────
-  const STEPS = ['conn','notfound','scanning','devices','waiting','transfer','success','fail'];
+  const steps = ['conn','notfound','scanning','devices','waiting','transfer','success','fail'];
   function showOfflineStep(name) {
-    STEPS.forEach(s => {
-      const el = document.getElementById('offline-step-' + s);
+    steps.forEach(s => {
+      const el = document.getElementById(`offline-step-${s}`);
       if (el) el.style.display = s === name ? '' : 'none';
     });
   }
 
-  let devices      = [];   // [{ip, name, platform, port}]
-  let selectedDev  = null;
-  let pendingSessionId = null;   // session we're waiting for receiver to accept
+  const recvStates = ['waiting','incoming','progress','success','declined'];
+  function showRecvState(name) {
+    recvStates.forEach(s => {
+      const el = document.getElementById(
+        s === 'progress' ? 'offline-recv-progress' : `offline-recv-${s}`
+      );
+      if (el) el.style.display = s === name ? '' : 'none';
+    });
+  }
+
+  // ── State ──
+  let offlineConnType  = null;
+  let selectedDevice   = null;
   let transferTimer    = null;
-  let pollTimer        = null;   // receiver-side poll timer
+  let lanWs            = null;    // WebSocket to LAN server
+  let myPeerId         = null;
+  let myPeerName       = 'This Device';
+  let rtcConn          = null;    // RTCPeerConnection
+  let dataChannel      = null;    // RTCDataChannel (sender side)
+  let recvBuffer       = [];      // incoming file chunks
+  let recvMeta         = null;    // { name, size, type, totalChunks }
+  let recvChunksGot    = 0;
+
+  // ── Detect environment ──
+  const IS_ELECTRON = !!window.electronAPI;
+  const LAN_PORT    = 7777;
+
+  // ── Phase 1 fake devices (fallback when no LAN server found) ──
+  const FAKE_DEVICES = [
+    { id: 'dev1', name: 'MacBook Pro',    deviceType: 'laptop', signal: '●●●● Excellent' },
+    { id: 'dev2', name: 'iPhone 15',      deviceType: 'phone',  signal: '●●●○ Good' },
+    { id: 'dev3', name: 'Windows PC',     deviceType: 'laptop', signal: '●●○○ Fair' },
+    { id: 'dev4', name: 'Samsung Galaxy', deviceType: 'phone',  signal: '●●●● Excellent' },
+  ];
+
+  // ── Helpers ──
+  function uuid() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0;
+      return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+  }
 
   function formatBytes(b) {
-    if (!b) return '—';
+    if (!b || b === 0) return '—';
     if (b < 1024)       return b + ' B';
     if (b < 1048576)    return (b / 1024).toFixed(1) + ' KB';
     if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
     return (b / 1073741824).toFixed(2) + ' GB';
   }
+
   function getDeviceIcon(type) {
     return type === 'phone' ? '#ico-device-phone' : '#ico-device-laptop';
   }
 
-  // ── Mode card click ────────────────────────────────────────────────────────
-  if (modeOfflineCard) {
-    modeOfflineCard.addEventListener('click', () => {
-      if (offlineSection) offlineSection.style.display = 'block';
-      autoDetectConnection();
+  // ── LAN Server connection ──────────────────────────────────────────────────
+
+  async function getLanServerUrl() {
+    // ── Electron: LAN server always on localhost ──
+    // Retry up to 5 times with 1s delay — server may still be starting
+    if (IS_ELECTRON) {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const info = await window.electronAPI.getLanInfo();
+        if (info) return `ws://localhost:${info.port}`;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      return null;
+    }
+
+    // ── Android native app: use URL from NSD/mDNS discovery ──
+    // BeamNative.getLanServerUrl() returns the Mac's LAN server URL
+    // discovered by LanDiscovery.kt (e.g. "http://192.168.1.5:7777").
+    // If not yet discovered, we return null and retry when onLanServerFound fires.
+    if (IS_ANDROID_NATIVE && window.BeamNative) {
+      const url = window.BeamNative.getLanServerUrl();
+      if (url && url.length > 0) {
+        return url.replace(/^http/, 'ws');
+      }
+      return null; // Discovery still in progress — autoDetectConnection will retry
+    }
+
+    // ── Browser served from a LAN server (non-standard origin) ──
+    const origin = window.location.origin;
+    if (origin && origin !== 'null' &&
+        !origin.includes('localhost') &&
+        !origin.includes('127.0.0.1') &&
+        !origin.includes('github.io') &&
+        !origin.includes('pages') &&
+        window.location.hostname) {
+      return `ws://${window.location.hostname}:${LAN_PORT}`;
+    }
+    return null;
+  }
+
+  async function connectLanServer() {
+    const wsUrl = await getLanServerUrl();
+    if (!wsUrl) return null;
+
+    return new Promise((resolve) => {
+      const ws = new WebSocket(wsUrl);
+      const timeout = setTimeout(() => { ws.close(); resolve(null); }, 3000);
+
+      ws.onopen = async () => {
+        clearTimeout(timeout);
+        myPeerId   = uuid();
+        myPeerName = IS_ELECTRON
+          ? (await window.electronAPI.getDeviceName())
+          : IS_ANDROID_NATIVE && window.BeamNative?.getDeviceName
+            ? window.BeamNative.getDeviceName()          // real Android model name
+            : (navigator.platform || 'Browser Device');
+
+        const deviceType = IS_ELECTRON
+          ? (await window.electronAPI.getDeviceType())
+          : (navigator.maxTouchPoints > 0 ? 'phone' : 'laptop');
+
+        ws.send(JSON.stringify({
+          type: 'register', id: myPeerId, name: myPeerName, deviceType,
+        }));
+        resolve(ws);
+      };
+
+      ws.onerror = () => { clearTimeout(timeout); resolve(null); };
     });
   }
 
-  // ── Main detect / scan ────────────────────────────────────────────────────
-  async function autoDetectConnection() {
-    showOfflineStep('scanning');
-    const scanNote = document.getElementById('offline-scan-note');
-    if (scanNote) scanNote.textContent = 'Looking for Beam devices on your WiFi…';
+  // ── WebRTC helpers ────────────────────────────────────────────────────────
 
-    devices = [];
+  const RTC_CONFIG = {
+    iceServers: [
+      // Local-network transfers work without STUN, but include as fallback
+      { urls: 'stun:stun.l.google.com:19302' },
+    ],
+  };
 
-    // If Android, add own server to devices list as self (skip)
-    // Start subnet scan
-    await scanSubnetForBeam();
+  function createPeerConnection(targetId) {
+    const pc = new RTCPeerConnection(RTC_CONFIG);
 
-    if (devices.length === 0) {
-      showOfflineStep('notfound');
-      const hint = document.getElementById('offline-notfound-hint');
-      if (hint) hint.innerHTML =
-        isAndroid()
-          ? 'Make sure the <strong>Beam desktop app</strong> is open on a Mac/Windows device on the same WiFi, then tap Try again.'
-          : 'Make sure the <strong>Beam app</strong> is open on the other device on the same WiFi network.';
-    } else {
-      renderDeviceList();
-      showOfflineStep('devices');
-    }
+    pc.onicecandidate = e => {
+      if (e.candidate && lanWs && lanWs.readyState === WebSocket.OPEN) {
+        lanWs.send(JSON.stringify({
+          type: 'signal',
+          to:   targetId,
+          data: { type: 'candidate', candidate: e.candidate },
+        }));
+      }
+    };
 
-    // Show QR code on Mac so Android can connect
-    if (IS_ELECTRON) showOfflineQR();
-    startPendingPoll();  // start polling for incoming requests
+    pc.onconnectionstatechange = () => {
+      console.log('[beam-lan] connectionState:', pc.connectionState);
+      if (pc.connectionState === 'failed') {
+        showOfflineStep('fail');
+        document.getElementById('offline-fail-detail').textContent =
+          'WebRTC connection failed. Make sure both devices are on the same WiFi network and the Mac firewall allows Electron (System Settings → Privacy & Security → Firewall).';
+      } else if (pc.connectionState === 'disconnected') {
+        showOfflineStep('fail');
+        document.getElementById('offline-fail-detail').textContent =
+          'Connection dropped mid-transfer. The receiver may have moved out of range.';
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log('[beam-lan] iceConnectionState:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') {
+        showOfflineStep('fail');
+        document.getElementById('offline-fail-detail').textContent =
+          'Network path not found. Both devices must be on the same WiFi network. Check: System Settings → Firewall → Electron.app → Allow incoming connections.';
+      }
+    };
+
+    return pc;
   }
 
-  // ── Subnet scan ────────────────────────────────────────────────────────────
-  async function scanSubnetForBeam() {
-    const localIp = await getLocalIpViaWebRTC();
-    if (!localIp) {
-      // On Android, try to get IP from native
-      const androidIp = isAndroid() ? (window.BeamNative?.getLocalIp?.() || '') : '';
-      if (!androidIp) return;
-      await scanIpRange(androidIp);
+  // ── Send: start transfer after receiver accepts ───────────────────────────
+
+  // ── Transfer orchestrator: WebRTC first → HTTP fallback, all files ────────
+
+  async function startRealTransfer(targetId) {
+    const files = filesToSend;
+    if (!files.length) {
+      showOfflineStep('fail');
+      document.getElementById('offline-fail-detail').textContent =
+        'No file selected. Drop a file first, then choose Offline mode.';
       return;
     }
-    await scanIpRange(localIp);
-  }
 
-  async function scanIpRange(localIp) {
-    const parts   = localIp.split('.');
-    const subnet  = parts.slice(0, 3).join('.');
-    const myOctet = parts[3];
-    console.log('[beam-lan] Scanning', subnet + '.1-254…');
-    const BATCH = 30;
-    for (let i = 1; i <= 254; i += BATCH) {
-      const batch = [];
-      for (let j = i; j < i + BATCH && j <= 254; j++) {
-        if (j.toString() === myOctet) continue;
-        batch.push(probeDevice(subnet + '.' + j));
+    const devName    = selectedDevice ? selectedDevice.name : 'receiver';
+    const totalFiles = files.length;
+
+    showOfflineStep('transfer');
+    const fillEl        = document.getElementById('offline-progress-fill');
+    const pctEl         = document.getElementById('offline-progress-pct');
+    const labelEl       = document.getElementById('offline-progress-label');
+    const badgeEl       = document.getElementById('transfer-method-badge');
+    const fallbackMsgEl = document.getElementById('transfer-fallback-msg');
+    const counterEl     = document.getElementById('offline-file-counter');
+    const fileCurrentEl = document.getElementById('offline-file-current');
+    const fileTotalEl   = document.getElementById('offline-file-total');
+    const fileNameEl    = document.getElementById('offline-file-name');
+
+    document.getElementById('offline-transfer-device').textContent =
+      totalFiles > 1 ? `${devName}  (${totalFiles} files)` : devName;
+
+    fillEl.style.width = '0%'; pctEl.textContent = '0%';
+    fallbackMsgEl.style.display = 'none';
+    badgeEl.style.display = 'none';
+
+    // Show per-file counter only when multiple files
+    if (totalFiles > 1) {
+      fileTotalEl.textContent = totalFiles;
+      counterEl.style.display = 'block';
+    } else {
+      counterEl.style.display = 'none';
+    }
+
+    function setMethod(type) {
+      badgeEl.className   = `transfer-method-badge ${type}`;
+      badgeEl.textContent = type === 'webrtc' ? '⚡ WebRTC' : '🔄 HTTP';
+      badgeEl.style.display = 'inline-flex';
+    }
+
+    function setProgress(pct, label) {
+      fillEl.style.width = pct + '%';
+      pctEl.textContent  = pct + '%';
+      if (label) labelEl.textContent = label;
+    }
+
+    function setFileCounter(index, name) {
+      if (totalFiles > 1) {
+        fileCurrentEl.textContent = index + 1;
+        fileNameEl.textContent    = name;
       }
-      await Promise.allSettled(batch);
     }
-    console.log('[beam-lan] Scan complete, found', devices.length, 'device(s)');
-  }
 
-  async function probeDevice(ip) {
-    const url  = 'http://' + ip + ':' + LAN_PORT + '/hello';
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 800);
-    try {
-      const res = await fetch(url, { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (!res.ok) return;
-      const h = await res.json();
-      if (!h.ok) return;
-      // Skip self
-      const selfIp = isAndroid() ? (window.BeamNative?.getLocalIp?.() || '') : '';
-      if (selfIp && ip === selfIp) return;
-      addDevice({ ip, name: h.name, platform: h.platform || 'unknown', port: h.port || LAN_PORT });
-    } catch(_) { clearTimeout(timer); }
-  }
+    // ── 1. Try WebRTC (fast, peer-to-peer, all files in one connection) ──
+    setMethod('webrtc');
+    setProgress(0, '⚡ Connecting via WebRTC…');
 
-  function addDevice(dev) {
-    if (devices.find(d => d.ip === dev.ip)) return;   // no duplicates
-    devices.push(dev);
-    // If already showing device list, refresh it
-    const devStep = document.getElementById('offline-step-devices');
-    if (devStep && devStep.style.display !== 'none') {
-      renderDeviceList();
+    const webrtcResult = await tryWebRtcTransfer(
+      targetId, files, setProgress, setFileCounter
+    );
+
+    if (webrtcResult.success) {
+      showTransferSuccess(files, devName, 'webrtc', null);
+      return;
     }
+
+    // ── 2. WebRTC failed — show reason + auto-fallback to HTTP ──
+    console.warn('[beam-lan] WebRTC failed:', webrtcResult.reason);
+
+    fallbackMsgEl.style.display = 'block';
+    fallbackMsgEl.textContent   =
+      `⚠️ WebRTC failed (${webrtcResult.reason}) — switching to HTTP automatically…`;
+
+    setMethod('http');
+    setProgress(0, '🔄 Retrying via HTTP…');
+
+    await new Promise(r => setTimeout(r, 1200));
+
+    const httpResult = await tryHttpTransfer(
+      targetId, files, setProgress, setFileCounter
+    );
+
+    if (httpResult.success) {
+      showTransferSuccess(files, devName, 'http', webrtcResult.reason);
+      return;
+    }
+
+    // ── 3. Both failed ──
+    showOfflineStep('fail');
+    document.getElementById('offline-fail-detail').textContent =
+      `Both WebRTC and HTTP failed. ${httpResult.error} — check that both devices are on the same WiFi network.`;
   }
 
-  async function getLocalIpViaWebRTC() {
+  // ── WebRTC transfer attempt (all files, single connection) ─────────────────
+
+  function tryWebRtcTransfer(targetId, files, onProgress, onFileChange) {
     return new Promise(resolve => {
-      try {
-        const pc = new RTCPeerConnection({ iceServers: [] });
-        pc.createDataChannel('');
-        pc.createOffer().then(o => pc.setLocalDescription(o));
-        pc.onicecandidate = e => {
-          if (!e?.candidate) return;
-          const m = e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
-          if (m && !m[1].startsWith('127.') && m[1] !== '0.0.0.0') {
-            resolve(m[1]); pc.close();
+      const CONNECT_TIMEOUT = 12000;
+      const CHUNK           = 64 * 1024;
+      const totalSize       = files.reduce((s, f) => s + f.size, 0);
+      let resolved = false;
+      let connectTimer = null;
+
+      function done(result) {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(connectTimer);
+        resolve(result);
+      }
+
+      const pc = createPeerConnection(targetId);
+      rtcConn  = pc;
+
+      const ch = pc.createDataChannel('beam-transfer', { ordered: true });
+      dataChannel = ch;
+      ch.binaryType = 'arraybuffer';
+
+      pc.oniceconnectionstatechange = () => {
+        console.log('[beam-lan] ICE state:', pc.iceConnectionState);
+        if (pc.iceConnectionState === 'failed') {
+          done({ success: false, reason: 'firewall blocking direct connection' });
+        } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+          clearTimeout(connectTimer);
+          connectTimer = setTimeout(() =>
+            done({ success: false, reason: 'data channel timed out after ICE connected' }), 10000);
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed')
+          done({ success: false, reason: 'WebRTC connection failed' });
+      };
+
+      connectTimer = setTimeout(() =>
+        done({ success: false, reason: 'connection timed out — network may be blocking UDP' }),
+        CONNECT_TIMEOUT);
+
+      ch.onopen = async () => {
+        clearTimeout(connectTimer);
+        try {
+          let bytesSentTotal = 0;
+
+          for (let i = 0; i < files.length; i++) {
+            const file        = files[i];
+            const totalChunks = Math.ceil(file.size / CHUNK);
+
+            onFileChange && onFileChange(i, file.name);
+
+            // Send per-file metadata
+            ch.send(JSON.stringify({
+              meta: true,
+              fileIndex:  i,
+              totalFiles: files.length,
+              name:       file.name,
+              size:       file.size,
+              type:       file.type || 'application/octet-stream',
+              totalChunks,
+            }));
+
+            const buffer = await file.arrayBuffer();
+            let offset = 0;
+
+            while (offset < buffer.byteLength) {
+              while (ch.bufferedAmount > 4 * 1024 * 1024) {
+                await new Promise(r => setTimeout(r, 10));
+              }
+              const chunk = buffer.slice(offset, offset + CHUNK);
+              ch.send(chunk);
+              offset        += chunk.byteLength;
+              bytesSentTotal += chunk.byteLength;
+
+              const overallPct = totalSize > 0
+                ? Math.round(bytesSentTotal / totalSize * 100) : 0;
+              onProgress(overallPct,
+                files.length > 1
+                  ? `⚡ File ${i + 1}/${files.length} via WebRTC…`
+                  : '⚡ Sending via WebRTC…');
+            }
           }
-        };
-        setTimeout(() => { try { pc.close(); } catch(_){} resolve(null); }, 3000);
-      } catch(_) { resolve(null); }
+
+          // All chunks pushed into send buffer — show "delivering" state.
+          // Don't mark success yet: data is still in-flight to the receiver.
+          onProgress(99, '⚡ Delivering to receiver…');
+          ch.send(JSON.stringify({ done: true, totalFiles: files.length }));
+
+          // ch.close() is called by the RECEIVER after all chunks are saved.
+          // The sender's onclose fires only after the receiver confirms and
+          // closes their end — this is the true "transfer complete" signal.
+          // Give receiver up to 60s to confirm before timing out.
+          const deliverTimer = setTimeout(() => {
+            done({ success: false, reason: 'receiver did not confirm within 60 s' });
+          }, 60000);
+
+          ch.onclose = () => {
+            clearTimeout(deliverTimer);
+            done({ success: true });
+          };
+
+        } catch (err) {
+          done({ success: false, reason: err.message });
+        }
+      };
+
+      ch.onerror = () => done({ success: false, reason: 'data channel error' });
+
+      pc.createOffer()
+        .then(offer => pc.setLocalDescription(offer))
+        .then(() => lanWs.send(JSON.stringify({
+          type: 'signal', to: targetId,
+          data: { type: 'offer', sdp: pc.localDescription.sdp },
+        })))
+        .catch(err => done({ success: false, reason: err.message }));
     });
   }
 
-  // ── Device list render ─────────────────────────────────────────────────────
-  function renderDeviceList() {
+  // ── Auto-calculate expiry based on total transfer size ───────────────────────
+  function calcExpiryMinutes(files) {
+    const totalBytes = files.reduce((s, f) => s + f.size, 0);
+    const MB = totalBytes / (1024 * 1024);
+    const GB = totalBytes / (1024 * 1024 * 1024);
+    if (GB >= 3)   return 60;
+    if (GB >= 1.5) return 45;
+    if (MB >= 500) return 30;
+    if (MB >= 100) return 20;
+    return 10;
+  }
+
+  // ── HTTP transfer fallback (all files, sequential uploads) ─────────────────
+
+  async function tryHttpTransfer(targetId, files, onProgress, onFileChange) {
+    try {
+      const lanInfo    = IS_ELECTRON ? await window.electronAPI.getLanInfo() : null;
+      const uploadBase = lanInfo
+        ? `http://localhost:${lanInfo.port}`
+        : `http://${window.location.hostname}:${LAN_PORT}`;
+
+      const totalSize    = files.reduce((s, f) => s + f.size, 0);
+      const expiryMins   = calcExpiryMinutes(files);
+      let bytesSentTotal = 0;
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        onFileChange && onFileChange(i, file.name);
+
+        const arrayBuffer = await file.arrayBuffer();
+
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', `${uploadBase}/upload`);
+          xhr.setRequestHeader('X-Filename',    encodeURIComponent(file.name));
+          xhr.setRequestHeader('X-Filesize',    String(file.size));
+          xhr.setRequestHeader('X-Filetype',    file.type || 'application/octet-stream');
+          xhr.setRequestHeader('X-Target-Peer', targetId);
+          xhr.setRequestHeader('X-From-Peer',   myPeerId  || '');
+          xhr.setRequestHeader('X-From-Name',      encodeURIComponent(myPeerName || 'Beam'));
+          xhr.setRequestHeader('X-File-Index',     String(i));
+          xhr.setRequestHeader('X-Total-Files',    String(files.length));
+          xhr.setRequestHeader('X-Expiry-Minutes', String(expiryMins));
+          xhr.setRequestHeader('Content-Type',  'application/octet-stream');
+
+          xhr.upload.onprogress = e => {
+            if (e.lengthComputable && totalSize > 0) {
+              const overallPct = Math.round(
+                (bytesSentTotal + e.loaded) / totalSize * 100
+              );
+              onProgress(overallPct,
+                files.length > 1
+                  ? `🔄 File ${i + 1}/${files.length} via HTTP…`
+                  : '🔄 Sending via HTTP…');
+            }
+          };
+          xhr.onload  = () => xhr.status === 200
+            ? resolve()
+            : reject(new Error(`Server error ${xhr.status} on file ${file.name}`));
+          xhr.onerror = () => reject(new Error('Network error — both devices must be on the same WiFi'));
+          xhr.send(arrayBuffer);
+        });
+
+        bytesSentTotal += file.size;
+      }
+
+      return { success: true };
+    } catch (err) {
+      console.error('[beam-lan] HTTP transfer error:', err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  // ── Show success with optional WebRTC failure guidance ───────────────────
+
+  const WEBRTC_GUIDANCE = {
+    'firewall blocking direct connection': {
+      reason: 'WebRTC requires direct device-to-device connection but the Mac firewall blocked it.',
+      fix:    'System Settings → Privacy & Security → Firewall → Firewall Options\n→ Find Electron.app → Change to "Allow incoming connections"',
+    },
+    'connection timed out — network may be blocking UDP': {
+      reason: 'WebRTC uses UDP packets which some corporate or hotel WiFi networks block.',
+      fix:    'Try connecting both devices to a personal hotspot instead of corporate WiFi, or ask your IT team to allow UDP traffic between devices.',
+    },
+    'data channel timed out after ICE connected': {
+      reason: 'Devices found each other but the data channel failed to open.',
+      fix:    'This is usually a temporary issue. Try again — it may work next time.',
+    },
+  };
+
+  function showTransferSuccess(files, devName, method, webrtcFailReason) {
+    const fillEl  = document.getElementById('offline-progress-fill');
+    const pctEl   = document.getElementById('offline-progress-pct');
+    const labelEl = document.getElementById('offline-progress-label');
+    fillEl.style.width = '100%'; pctEl.textContent = '100%';
+    labelEl.textContent = method === 'webrtc' ? '⚡ Complete!' : '🔄 Delivered!';
+
+    const fileList   = files.length === 1
+      ? files[0].name
+      : `${files.length} files`;
+    const expiryMins = calcExpiryMinutes(files);
+    const expiryLabel = expiryMins >= 60 ? '1 hour'
+      : expiryMins >= 45 ? '45 minutes'
+      : expiryMins >= 30 ? '30 minutes'
+      : expiryMins >= 20 ? '20 minutes'
+      : '10 minutes';
+
+    setTimeout(() => {
+      const viaLabel = method === 'webrtc' ? 'via WebRTC (direct)' : 'via HTTP';
+      const expiryNote = method === 'http'
+        ? ` Receiver has ${expiryLabel} to download.`
+        : '';
+      document.getElementById('offline-success-detail').textContent =
+        `Sent ${fileList} to ${devName} ${viaLabel}.${expiryNote}`;
+
+      // Show guidance if HTTP fallback was used
+      const guidanceBox = document.getElementById('transfer-guidance-box');
+      if (method === 'http' && webrtcFailReason) {
+        const g = WEBRTC_GUIDANCE[webrtcFailReason] || {
+          reason: `WebRTC failed: ${webrtcFailReason}.`,
+          fix:    'Check that both devices are on the same WiFi and the Mac firewall allows Electron.',
+        };
+        document.getElementById('tg-reason').textContent = g.reason;
+        document.getElementById('tg-fix').textContent    = g.fix;
+        guidanceBox.style.display = 'block';
+      } else {
+        guidanceBox.style.display = 'none';
+      }
+
+      showOfflineStep('success');
+      if (typeof showPopup === 'function') {
+        showPopup('✅', 'Transfer Complete!',
+          files.length === 1
+            ? `${files[0].name} sent to ${devName}.`
+            : `${files.length} files sent to ${devName}.`,
+          'success', 5000);
+      }
+      if (IS_ELECTRON) {
+        window.electronAPI.notify('Transfer Complete',
+          files.length === 1
+            ? `${files[0].name} delivered to ${devName}.`
+            : `${files.length} files delivered to ${devName}.`);
+      }
+    }, 400);
+  }
+
+  // ── LAN WebSocket message handler ────────────────────────────────────────
+
+  let peers = []; // real peer list from LAN server
+
+  function setupLanMessageHandler(ws) {
+    ws.onmessage = event => {
+      let msg;
+      try { msg = JSON.parse(event.data); } catch { return; }
+
+      switch (msg.type) {
+
+        case 'peers': {
+          // Filter out ourselves
+          peers = msg.list.filter(p => p.id !== myPeerId);
+          // If device list is showing, refresh it
+          const devStep = document.getElementById('offline-step-devices');
+          if (devStep && devStep.style.display !== 'none') {
+            renderDeviceList(peers);
+          }
+          break;
+        }
+
+        case 'signal': {
+          const { from, data } = msg;
+          if (!rtcConn) {
+            // We are the receiver — incoming offer
+            if (data.type === 'offer') {
+              handleIncomingRtcConnection(from, data.sdp);
+              rtcConn.setRemoteDescription({ type: 'offer', sdp: data.sdp })
+                .then(() => rtcConn.createAnswer())
+                .then(answer => {
+                  rtcConn.setLocalDescription(answer);
+                  ws.send(JSON.stringify({
+                    type: 'signal', to: from,
+                    data: { type: 'answer', sdp: answer.sdp },
+                  }));
+                });
+            }
+          } else {
+            // We have an existing connection
+            if (data.type === 'answer') {
+              rtcConn.setRemoteDescription({ type: 'answer', sdp: data.sdp });
+            } else if (data.type === 'candidate') {
+              rtcConn.addIceCandidate(data.candidate).catch(() => {});
+            }
+          }
+          break;
+        }
+
+        case 'transfer-request': {
+          // Someone wants to send us files — show global overlay regardless of active tab/mode
+          const f = msg.files[0];
+          window._offlineIncomingSender = { id: msg.from, name: msg.fromName };
+          window._offlineIncomingFile   = f;
+          // Update global overlay
+          document.getElementById('lan-incoming-file').textContent =
+            f.name;
+          document.getElementById('lan-incoming-meta').textContent =
+            `${formatBytes(f.size)} · from ${msg.fromName}`;
+          document.getElementById('lan-incoming-btns').style.display   = 'flex';
+          document.getElementById('lan-recv-progress').style.display   = 'none';
+          document.getElementById('lan-recv-fill').style.width          = '0%';
+          document.getElementById('lan-recv-pct').textContent           = '0%';
+          document.getElementById('lan-incoming-overlay').classList.add('show');
+          // Also update the recv section if it's visible
+          document.getElementById('offline-incoming-sender').textContent = msg.fromName;
+          document.getElementById('offline-incoming-file').textContent   = f.name;
+          document.getElementById('offline-incoming-size').textContent   = formatBytes(f.size);
+          showRecvState('incoming');
+          break;
+        }
+
+        case 'transfer-accepted': {
+          // Clear the wait timer immediately — receiver responded
+          if (window._offlineWaitTimer) {
+            clearTimeout(window._offlineWaitTimer);
+            window._offlineWaitTimer = null;
+          }
+          startRealTransfer(selectedDevice.id);
+          break;
+        }
+
+        case 'transfer-declined': {
+          showOfflineStep('fail');
+          document.getElementById('offline-fail-detail').textContent =
+            `${selectedDevice?.name || 'The receiver'} declined the transfer.`;
+          break;
+        }
+
+        case 'file-ready': {
+          // LAN server has a file ready — add to download queue (handles multi-file correctly)
+          const host = IS_ELECTRON ? `localhost:${LAN_PORT}` : window.location.host;
+          const downloadUrl = `http://${host}${msg.downloadUrl}`;
+          const fileIdx  = msg.fileIndex  ?? 0;
+          const totalF   = msg.totalFiles ?? 1;
+
+          // Reset batch on first file
+          if (fileIdx === 0) {
+            _dlQueue.length = 0;
+            _dlActive  = false;
+            _dlDone    = 0;
+            _dlTotal   = totalF;
+            _dlFromName = msg.fromName || '';
+          }
+
+          _dlQueue.push({ url: downloadUrl, filename: msg.filename, fromName: msg.fromName || '', filesize: msg.filesize || 0 });
+
+          // Show overlay with progress (no Accept needed for Electron — auto-download)
+          const overlay = document.getElementById('lan-incoming-overlay');
+          document.getElementById('lan-incoming-file').textContent =
+            totalF > 1
+              ? `Receiving ${totalF} files from ${msg.fromName}…`
+              : `Receiving ${msg.filename} from ${msg.fromName}…`;
+          document.getElementById('lan-incoming-btns').style.display = 'none';
+          document.getElementById('lan-recv-progress').style.display = 'block';
+          if (!overlay.classList.contains('show')) overlay.classList.add('show');
+
+          _processDlQueue();
+
+          window._offlineIncomingSender = { id: msg.fromPeer, name: msg.fromName };
+          window._offlineIncomingFile   = { name: msg.filename, size: msg.filesize };
+          break;
+        }
+
+        case 'external-server-found': {
+          // Mac's LAN server discovered another Beam server (e.g. Android)
+          // via active mDNS browsing. Connect to it so both sides see each other.
+          const extUrl = msg.url;
+          if (!extUrl || externalServers.has(extUrl)) break;
+          externalServers.add(extUrl);
+
+          console.log('[beam-lan] Connecting to external server:', extUrl);
+          connectToExternalServer(extUrl, msg.deviceName);
+          break;
+        }
+      }
+    };
+
+    ws.onclose = () => {
+      lanWs = null;
+      peers = [];
+    };
+  }
+
+  // ── External server connections (Mac discovers Android) ───────────────────
+  // When Mac's mDNS browser finds another Beam server, Mac's frontend
+  // connects to it as a peer. Both sides now see each other in device list.
+
+  const externalServers = new Set();     // URLs already connected
+  const externalWsMap   = new Map();     // url → WebSocket
+
+  async function connectToExternalServer(url, deviceName) {
+    const wsUrl = url.replace(/^http/, 'ws');
+    const extWs = new WebSocket(wsUrl);
+    const timeout = setTimeout(() => { extWs.close(); }, 5000);
+
+    extWs.onopen = () => {
+      clearTimeout(timeout);
+      extWs.send(JSON.stringify({
+        type:       'register',
+        id:         myPeerId   || ('ext-' + Math.random().toString(36).slice(2)),
+        name:       myPeerName || 'Mac',
+        deviceType: 'laptop',
+      }));
+      externalWsMap.set(url, extWs);
+      console.log('[beam-lan] Connected to external server:', url);
+    };
+
+    extWs.onmessage = event => {
+      let msg2;
+      try { msg2 = JSON.parse(event.data); } catch { return; }
+
+      if (msg2.type === 'peers') {
+        // Merge external peers into our list (tagged so we know which server to use)
+        const extPeers = msg2.list
+          .filter(p => p.id !== myPeerId)
+          .map(p => ({ ...p, _externalWs: extWs, _externalUrl: url }));
+
+        // Deduplicate and update device list
+        const merged = [...peers.filter(p => !p._externalUrl || p._externalUrl !== url), ...extPeers];
+        peers = merged;
+
+        const devStep = document.getElementById('offline-step-devices');
+        if (devStep && devStep.style.display !== 'none') {
+          renderDeviceList(peers);
+        }
+      }
+
+      // Forward signals from external server (for WebRTC if needed)
+      if (msg2.type === 'signal' && lanWs && lanWs.readyState === WebSocket.OPEN) {
+        lanWs.send(JSON.stringify(msg2));
+      }
+    };
+
+    extWs.onclose = () => {
+      externalServers.delete(url);
+      externalWsMap.delete(url);
+      peers = peers.filter(p => p._externalUrl !== url);
+    };
+  }
+
+  // Use the correct WebSocket for signalling depending on which server the peer is on
+  function sendSignal(targetPeer, payload) {
+    if (targetPeer._externalWs && targetPeer._externalWs.readyState === WebSocket.OPEN) {
+      targetPeer._externalWs.send(JSON.stringify(payload));
+    } else if (lanWs && lanWs.readyState === WebSocket.OPEN) {
+      lanWs.send(JSON.stringify(payload));
+    }
+  }
+
+  // ── Mode selection ────────────────────────────────────────────────────────
+
+  // ── Disable Offline mode in web browser — requires desktop or Android app ──
+  const _isOfflineAvailable = IS_ELECTRON || IS_ANDROID_NATIVE;
+
+  function applyOfflineUnavailableStyles() {
+    if (_isOfflineAvailable) return;
+    const card = document.getElementById('mode-offline');
+    if (!card) return;
+    card.classList.add('unavailable');
+    card.setAttribute('aria-disabled', 'true');
+    const tag = document.getElementById('offline-app-tag');
+    if (tag) tag.style.display = 'inline-flex';
+    const hiwWarning = document.getElementById('hiw-offline-browser-warning');
+    if (hiwWarning) hiwWarning.style.display = 'block';
+  }
+
+  // Apply immediately (in case DOM is ready)
+  applyOfflineUnavailableStyles();
+
+  // Also apply whenever the mode selector becomes visible (files queued)
+  // Use MutationObserver to catch when #mode-selector display changes
+  if (!_isOfflineAvailable) {
+    const modeSelector = document.getElementById('mode-selector');
+    if (modeSelector) {
+      const obs = new MutationObserver(() => {
+        if (modeSelector.style.display !== 'none') {
+          applyOfflineUnavailableStyles();
+        }
+      });
+      obs.observe(modeSelector, { attributes: true, attributeFilter: ['style'] });
+    }
+  }
+
+  const _origSelectMode = window.selectMode;
+  window.selectMode = function(mode) {
+    if (mode === 'offline' && !_isOfflineAvailable) {
+      // Browser user tapped Offline — show download prompt instead
+      if (typeof showPopup === 'function') {
+        showPopup('📱', 'App required for Offline mode',
+          'Offline transfers need the Beam desktop app (Mac/Windows/Linux) or Android app. Download free from GitHub.',
+          'warn', 8000);
+      }
+      return; // do not activate offline mode
+    }
+
+    if (mode !== 'offline') {
+      offlineSection.style.display      = 'none';
+      offlineRecvSection.style.display  = 'none';
+      modeOfflineCard.classList.remove('active');
+      disconnectLan();
+      _origSelectMode(mode);
+      return;
+    }
+    _origSelectMode.call(window, 'cloud');
+    document.getElementById('mode-p2p').classList.remove('active');
+    document.getElementById('mode-cloud').classList.remove('active');
+    document.getElementById('expiry-picker').style.display          = 'none';
+    document.getElementById('cloud-link-display').style.display     = 'none';
+    document.getElementById('cloud-upload-progress').innerHTML      = '';
+    const megaErr = document.getElementById('mega-error-box');
+    if (megaErr) megaErr.style.display = 'none';
+    ['code-display','keep-open-note','share-via'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+    modeOfflineCard.classList.add('active');
+    offlineSection.style.display = 'block';
+    const ss = document.getElementById('send-status');
+    if (ss) ss.textContent = '';
+
+    // Show Android's own QR code immediately when offline mode opens
+    // so other devices can scan it without waiting for discovery
+    if (IS_ANDROID_NATIVE && window.BeamNative?.isRunningServer?.()) {
+      const serverUrl = window.BeamNative.getLocalServerUrl();
+      if (serverUrl) {
+        const box    = document.getElementById('offline-android-box');
+        const urlEl  = document.getElementById('offline-android-url');
+        const qrWrap = document.getElementById('offline-qr-wrap');
+        if (box && urlEl && qrWrap) {
+          urlEl.textContent = serverUrl;
+          qrWrap.innerHTML  = '';
+          box.style.display = 'block';
+          const tryQR = () => {
+            if (typeof QRCode !== 'undefined') {
+              new QRCode(qrWrap, { text: serverUrl, width: 68, height: 68,
+                colorDark: '#000', colorLight: '#fff', correctLevel: QRCode.CorrectLevel.M });
+            } else { setTimeout(tryQR, 200); }
+          };
+          tryQR();
+        }
+      }
+    }
+
+    autoDetectConnection();
+  };
+
+  // Called by MainActivity.kt when NSD/mDNS discovers the Beam LAN server.
+  // If Offline mode was waiting for discovery, retry autoDetectConnection now.
+  const _prevOnLanServerFound = window.onLanServerFound;
+  window.onLanServerFound = function(url) {
+    if (_prevOnLanServerFound) _prevOnLanServerFound(url);
+    if (window._pendingOfflineDetect) {
+      window._pendingOfflineDetect = false;
+      console.log('[beam] LAN server found via NSD:', url, '— retrying offline detect');
+      autoDetectConnection();
+    }
+  };
+
+  function disconnectLan() {
+    if (lanWs) { lanWs.close(); lanWs = null; }
+    if (rtcConn) { rtcConn.close(); rtcConn = null; }
+    dataChannel = null;
+    peers = [];
+  }
+
+  // ── Auto-detect connection ──────────────────────────────────────────────
+
+  async function autoDetectConnection() {
+    showOfflineStep('conn');
+    document.getElementById('offline-chosen-result').style.display = 'none';
+    document.getElementById('offline-android-box').style.display   = 'none';
+    document.getElementById('offline-detect-ring').style.display   = '';
+    document.getElementById('offline-detect-title').textContent    = 'Detecting best connection…';
+    document.getElementById('offline-detect-sub').textContent      =
+      IS_ANDROID_NATIVE
+        ? 'Searching for Beam desktop app on your WiFi…'
+        : 'Checking network and Bluetooth availability';
+
+    offlineConnType = 'wifi';
+
+    // On Android, NSD discovery runs in the background.
+    // If URL not yet known — show searching state and set a 20s timeout.
+    if (IS_ANDROID_NATIVE && window.BeamNative) {
+      const existingUrl = window.BeamNative.getLanServerUrl();
+      if (!existingUrl) {
+        document.getElementById('offline-detect-title').textContent =
+          'Searching for Beam on your WiFi…';
+        document.getElementById('offline-detect-sub').textContent =
+          'Make sure the Beam desktop app is open on the same network';
+
+        window._pendingOfflineDetect = true;
+
+        // Timeout — if NSD doesn't find anything in 20s, show not-found screen
+        if (window._offlineDiscoveryTimer) clearTimeout(window._offlineDiscoveryTimer);
+        window._offlineDiscoveryTimer = setTimeout(() => {
+          if (window._pendingOfflineDetect) {
+            window._pendingOfflineDetect = false;
+            document.getElementById('offline-detect-ring').style.display = 'none';
+            showOfflineStep('notfound');
+            document.getElementById('offline-notfound-title').textContent = 'No Beam device found';
+            document.getElementById('offline-notfound-msg').textContent =
+              'Searched for 20 seconds but couldn\'t find a Beam desktop app on this WiFi.';
+            document.getElementById('offline-notfound-hint').innerHTML =
+              '• Open the <strong>Beam desktop app</strong> on Mac, Windows, or Linux<br>' +
+              '• Make sure it\'s on the <strong>same WiFi</strong> as this phone<br>' +
+              '• Or enter the IP address shown in the desktop app below';
+          }
+        }, 20000);
+
+        return; // Will be re-triggered by onLanServerFound or user retries
+      }
+      // URL known — clear any pending timer
+      if (window._offlineDiscoveryTimer) {
+        clearTimeout(window._offlineDiscoveryTimer);
+        window._offlineDiscoveryTimer = null;
+      }
+    }
+
+    // Try to connect to LAN server
+    const ws = await connectLanServer();
+
+    setTimeout(() => {
+      document.getElementById('offline-detect-ring').style.display = 'none';
+      document.getElementById('offline-detect-title').textContent  = 'Connection ready';
+      document.getElementById('offline-detect-sub').textContent    = '';
+
+      if (ws) {
+        lanWs = ws;
+        setupLanMessageHandler(ws);
+        document.getElementById('offline-chosen-mode-line').innerHTML =
+          '<svg class="icon" width="14" height="14"><use href="#ico-wifi"/></svg> WiFi — LAN server connected';
+        document.getElementById('offline-chosen-why').textContent =
+          IS_ELECTRON
+            ? 'Your Beam desktop app is running a local network server. Other devices on the same WiFi can connect automatically.'
+            : 'Connected to a Beam LAN server on your network. Files will transfer directly over WiFi — no internet needed.';
+        document.getElementById('offline-chosen-fallback').textContent =
+          'Bluetooth fallback coming in Phase 3.';
+
+        // Show Android QR code when running in Electron
+        if (IS_ELECTRON) {
+          window.electronAPI.getLanInfo().then(info => {
+            if (!info) return;
+            const url     = `http://${info.ip}:${info.port}`;
+            const box     = document.getElementById('offline-android-box');
+            const urlEl   = document.getElementById('offline-android-url');
+            const qrWrap  = document.getElementById('offline-qr-wrap');
+            urlEl.textContent  = url;
+            qrWrap.innerHTML   = '';
+            box.style.display  = 'block';
+            // Generate QR code once the library has loaded
+            function makeQR() {
+              if (typeof QRCode !== 'undefined') {
+                new QRCode(qrWrap, {
+                  text:         url,
+                  width:        68,
+                  height:       68,
+                  colorDark:    '#000000',
+                  colorLight:   '#ffffff',
+                  correctLevel: QRCode.CorrectLevel.M,
+                });
+              } else {
+                setTimeout(makeQR, 200); // wait for CDN script to load
+              }
+            }
+            makeQR();
+          });
+        }
+      } else {
+        // No LAN server found
+        if (IS_ELECTRON) {
+          // Electron: LAN server should always be running — retry automatically
+          document.getElementById('offline-detect-title').textContent = 'Starting LAN server…';
+          document.getElementById('offline-detect-sub').textContent   = 'Please wait a moment';
+          setTimeout(() => autoDetectConnection(), 3000); // retry in 3s
+          return;
+        }
+        if (IS_ANDROID_NATIVE) {
+          // On Android: never show demo mode — show the not-found screen instead
+          document.getElementById('offline-detect-ring').style.display = 'none';
+          showOfflineStep('notfound');
+          document.getElementById('offline-notfound-title').textContent = 'No Beam device found';
+          document.getElementById('offline-notfound-msg').textContent =
+            'Could not connect to a Beam LAN server on this WiFi network.';
+          document.getElementById('offline-notfound-hint').innerHTML =
+            '• Open the <strong>Beam desktop app</strong> on Mac, Windows, or Linux<br>' +
+            '• Make sure it\'s on the <strong>same WiFi</strong> as this phone<br>' +
+            '• Or tap <strong>Scan QR</strong> / enter the IP address below';
+          return;
+        }
+        document.getElementById('offline-chosen-mode-line').innerHTML =
+          '<svg class="icon" width="14" height="14"><use href="#ico-wifi"/></svg> Browser demo mode';
+        document.getElementById('offline-chosen-why').textContent =
+          IS_ELECTRON
+            ? 'Starting LAN server… please wait a moment and try again.'
+            : 'No Beam LAN server found. Showing demo mode for browser testing only.';
+        document.getElementById('offline-chosen-fallback').textContent =
+          'Install the Beam desktop app to enable real offline transfers.';
+      }
+      document.getElementById('offline-chosen-result').style.display = 'block';
+
+      setTimeout(() => {
+        document.getElementById('offline-scanning-title').textContent =
+          ws ? 'Searching for nearby devices on WiFi…' : 'Searching for nearby devices…';
+        document.getElementById('offline-scan-note').textContent =
+          ws ? 'Make sure the receiver has Beam open on the same network'
+             : 'Real devices appear here when the desktop app is running';
+        showOfflineStep('scanning');
+
+        setTimeout(() => {
+          const deviceList = ws ? peers : (IS_ANDROID_NATIVE ? [] : FAKE_DEVICES);
+          renderDeviceList(deviceList);
+
+          // Show QR code if Android is running its own server
+          if (IS_ANDROID_NATIVE && window.BeamNative?.isRunningServer?.()) {
+            const serverUrl = window.BeamNative.getLocalServerUrl();
+            if (serverUrl) {
+              const qrSection = document.getElementById('offline-qr-section');
+              const urlEl     = document.getElementById('offline-device-url');
+              const qrEl      = document.getElementById('offline-device-qr');
+              if (qrSection && urlEl && qrEl) {
+                urlEl.textContent = serverUrl;
+                qrEl.innerHTML    = '';
+                qrSection.style.display = 'block';
+                const tryQR = () => {
+                  if (typeof QRCode !== 'undefined') {
+                    new QRCode(qrEl, { text: serverUrl, width: 68, height: 68,
+                      colorDark: '#000', colorLight: '#fff', correctLevel: QRCode.CorrectLevel.M });
+                  } else { setTimeout(tryQR, 200); }
+                };
+                tryQR();
+              }
+            }
+          }
+
+          if (ws && deviceList.length === 0) {
+            // Connected to LAN server but no other peers yet — show message inside device step
+            showOfflineStep('devices');
+            // After 15s still empty → suggest opening Beam on other device
+            setTimeout(() => {
+              const items = document.getElementById('offline-device-items');
+              if (items && items.innerHTML.includes('No devices')) {
+                items.innerHTML = `
+                  <div style="text-align:center;padding:20px;color:var(--muted);font-size:.78rem;line-height:1.6">
+                    <div style="font-size:1.4rem;margin-bottom:8px">📱</div>
+                    <strong style="color:var(--muted-2)">No devices joined yet</strong><br>
+                    On the other device, open Beam and select <strong>Offline</strong> mode to appear here.
+                    <br><br>
+                    <button class="offline-retry-scan-btn" onclick="resetOfflineMode()" style="font-size:.75rem;padding:7px 16px">Scan again</button>
+                  </div>`;
+              }
+            }, 15000);
+          } else {
+            showOfflineStep('devices');
+          }
+        }, ws ? 1000 : 2200);
+      }, 2800);
+    }, 1500);
+  }
+
+  // ── Device list rendering ─────────────────────────────────────────────────
+
+  function renderDeviceList(deviceList) {
     const container = document.getElementById('offline-device-items');
-    if (!container) return;
     container.innerHTML = '';
-    devices.forEach(dev => {
+
+    // Never show fake devices on Android — only on browser for demo purposes
+    const list = deviceList.length > 0 ? deviceList
+      : (lanWs || IS_ANDROID_NATIVE ? [] : FAKE_DEVICES.slice(0, 2 + Math.floor(Math.random() * 3)));
+
+    if (list.length === 0) {
+      container.innerHTML = `<div style="text-align:center;padding:20px;color:var(--muted);font-size:.8rem">
+        No devices found yet — make sure the receiver has Beam open on the same network
+      </div>`;
+      return;
+    }
+
+    list.forEach(dev => {
+      const ico  = getDeviceIcon(dev.deviceType || dev.type);
       const item = document.createElement('div');
       item.className = 'offline-device-item';
       item.innerHTML = `
-        <svg class="offline-device-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <use href="${getDeviceIcon(dev.platform === 'android' ? 'phone' : 'laptop')}"/>
-        </svg>
+        <div class="offline-device-ico">
+          <svg class="icon" width="20" height="20"><use href="${ico}"/></svg>
+        </div>
         <div class="offline-device-info">
-          <div class="offline-device-name">${escHtml(dev.name)}</div>
-          <div class="offline-device-sub">${dev.ip} · ${escHtml(dev.platform)}</div>
-        </div>`;
+          <div class="offline-device-name">${dev.name}</div>
+          <div class="offline-device-meta">${lanWs ? 'Local network · Beam' : 'Local network · Beam'}</div>
+        </div>
+        <div class="offline-device-signal">${dev.signal || '●●●● Excellent'}</div>
+      `;
       item.addEventListener('click', () => selectOfflineDevice(dev));
       container.appendChild(item);
     });
   }
 
-  function escHtml(s) {
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
+  // ── Device selection ──────────────────────────────────────────────────────
 
-  // ── Select device and start transfer ─────────────────────────────────────
   function selectOfflineDevice(dev) {
-    const files = filesToSend;
-    if (!files || files.length === 0) {
-      if (typeof showPopup === 'function')
-        showPopup('⚠️', 'No files selected', 'Drop files first, then tap a device.', 'warn', 4000);
-      return;
-    }
-
-    selectedDev = dev;
+    selectedDevice = dev;
     document.getElementById('offline-waiting-device').textContent = dev.name;
     showOfflineStep('waiting');
 
-    if (isAndroid() && window.BeamNative) {
-      // ── Android: hand off to Foreground Service ─────────────────────────
-      // The service announces, polls for acceptance, then streams files.
-      // Screen can turn off after this call — service runs independently.
-      const result = window.BeamNative.startLocalSendUpload(dev.ip);
-      try {
-        const r = JSON.parse(result);
-        if (r.error) {
-          showOfflineStep('fail');
-          document.getElementById('offline-fail-detail').textContent = r.error;
-          return;
-        }
-      } catch(_) {}
-      // Progress/complete/fail will come via onNativeTransferProgress/Complete/Failed callbacks
-      showOfflineStep('transfer');
-      document.getElementById('offline-transfer-device').textContent = dev.name;
-      setOfflineProgress(0, 'Connecting…');
-      // Timeout in case something goes wrong silently
-      transferTimer = setTimeout(() => {
-        if (document.getElementById('offline-step-transfer')?.style.display !== 'none') {
-          showOfflineStep('fail');
-          document.getElementById('offline-fail-detail').textContent =
-            'Transfer timed out. The receiver may have dismissed the request.';
-        }
-      }, 120_000);
+    const devWs = dev._externalWs || lanWs;
+    if (devWs && devWs.readyState === WebSocket.OPEN) {
+      // Real mode: send transfer request via the correct server (own or external)
+      const files = filesToSend;
+      devWs.send(JSON.stringify({
+        type:  'transfer-request',
+        to:    dev.id,
+        files: files.map(f => ({ name: f.name, size: f.size, type: f.type })),
+      }));
+      // Timeout if no acceptance received in 60s
+      window._offlineWaitTimer = setTimeout(() => {
+        showOfflineStep('fail');
+        document.getElementById('offline-fail-detail').textContent =
+          `${dev.name} did not accept the transfer in time. Make sure they have the Beam page open and tapped Accept on the incoming popup.`;
+      }, 60000);
+    } else if (IS_ANDROID_NATIVE) {
+      // Android with no LAN connection — show error, never simulate
+      showOfflineStep('fail');
+      document.getElementById('offline-fail-detail').textContent =
+        'Not connected to a Beam LAN server. Go back and scan the QR code or enter the IP address of the Beam desktop app.';
     } else {
-      // ── Mac / browser: use fetch ──────────────────────────────────────────
-      startBrowserTransfer(dev, files);
+      // Browser demo mode only — simulate acceptance after 2.5s
+      setTimeout(() => startSimulatedTransfer(), 2500);
     }
   }
   window.selectOfflineDevice = selectOfflineDevice;
 
-  // ── Browser-side transfer (fetch-based) ───────────────────────────────────
-  async function startBrowserTransfer(dev, files) {
-    const receiverUrl = 'http://' + dev.ip + ':' + LAN_PORT;
-    const fromName    = IS_ELECTRON
-      ? (await window.electronAPI?.getDeviceName?.() || 'Mac')
-      : (navigator.platform || 'Browser');
+  // ── Simulated transfer (demo/no LAN server) ───────────────────────────────
 
-    // 1. Announce
-    let sessionId;
-    try {
-      const announceResp = await fetch(receiverUrl + '/send-request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          senderName: fromName,
-          files: files.map(f => ({ name: f.name, size: f.size, type: f.type })),
-        }),
-      });
-      const j = await announceResp.json();
-      sessionId = j.sessionId;
-    } catch(e) {
-      showOfflineStep('fail');
-      document.getElementById('offline-fail-detail').textContent =
-        'Could not reach ' + dev.name + '. Make sure Beam is open on their device.';
-      return;
-    }
-
-    // 2. Poll for acceptance (max 90s)
-    let accepted = false;
-    for (let t = 0; t < 180; t++) {
-      await sleep(500);
-      try {
-        const sr = await fetch(receiverUrl + '/status/' + sessionId);
-        const s  = (await sr.json()).status;
-        if (s === 'accepted') { accepted = true; break; }
-        if (s === 'declined') {
-          showOfflineStep('fail');
-          document.getElementById('offline-fail-detail').textContent =
-            dev.name + ' declined the transfer.';
-          return;
-        }
-      } catch(_) {}
-    }
-    if (!accepted) {
-      showOfflineStep('fail');
-      document.getElementById('offline-fail-detail').textContent =
-        dev.name + ' did not respond in time.';
-      return;
-    }
-
-    // 3. Upload each file
-    showOfflineStep('transfer');
+  function startSimulatedTransfer() {
+    const dev = selectedDevice;
+    if (!dev) return;
     document.getElementById('offline-transfer-device').textContent = dev.name;
-    const totalFiles = files.length;
+    showOfflineStep('transfer');
 
-    for (let i = 0; i < totalFiles; i++) {
-      const file    = files[i];
-      setOfflineProgress(0, 'Sending ' + file.name + '…');
-      updateFileCounter(i + 1, totalFiles, file.name);
+    const fillEl  = document.getElementById('offline-progress-fill');
+    const pctEl   = document.getElementById('offline-progress-pct');
+    const labelEl = document.getElementById('offline-progress-label');
+    let pct = 0;
 
-      try {
-        await uploadFile(receiverUrl, file, sessionId, i, totalFiles, fromName, pct => {
-          setOfflineProgress(pct, 'Sending ' + file.name + '…');
-        });
-      } catch(e) {
-        showOfflineStep('fail');
-        document.getElementById('offline-fail-detail').textContent =
-          'Failed to send ' + file.name + ': ' + e.message;
-        return;
+    transferTimer = setInterval(() => {
+      pct += Math.random() * 8 + 3;
+      if (pct >= 100) {
+        pct = 100;
+        clearInterval(transferTimer);
+        fillEl.style.width  = '100%';
+        pctEl.textContent   = '100%';
+        labelEl.textContent = 'Complete!';
+        setTimeout(() => {
+          const files = filesToSend;
+          const names = files.length > 0 ? files.map(f => f.name).join(', ') : 'your file(s)';
+          document.getElementById('offline-success-detail').textContent =
+            `Sent ${names} to ${dev.name} successfully. (Demo mode)`;
+          showOfflineStep('success');
+          if (typeof showPopup === 'function') {
+            showPopup('✅', 'Transfer Complete!', `${files.length || 1} file(s) sent to ${dev.name}.`, 'success', 5000);
+          }
+        }, 600);
+      } else {
+        fillEl.style.width = pct + '%';
+        pctEl.textContent  = Math.round(pct) + '%';
       }
-    }
-
-    // 4. Done
-    setOfflineProgress(100, 'Complete!');
-    setTimeout(() => {
-      document.getElementById('offline-success-detail').textContent =
-        'Sent ' + (totalFiles > 1 ? totalFiles + ' files' : files[0].name) + ' to ' + dev.name + '.';
-      showOfflineStep('success');
-      if (typeof showPopup === 'function')
-        showPopup('✅', 'Transfer Complete!', files.length + ' file(s) sent to ' + dev.name + '.', 'success', 5000);
-    }, 600);
+    }, 180);
   }
 
-  async function uploadFile(baseUrl, file, sessionId, fileIndex, totalFiles, fromName, onProgress) {
-    // Use XMLHttpRequest so we get upload progress events
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', baseUrl + '/upload');
-      xhr.setRequestHeader('X-Filename',    encodeURIComponent(file.name));
-      xhr.setRequestHeader('X-Filesize',    String(file.size));
-      xhr.setRequestHeader('X-Filetype',    file.type || 'application/octet-stream');
-      xhr.setRequestHeader('X-From-Name',   encodeURIComponent(fromName));
-      xhr.setRequestHeader('X-Session-Id',  sessionId);
-      xhr.setRequestHeader('X-File-Index',  String(fileIndex));
-      xhr.setRequestHeader('X-Total-Files', String(totalFiles));
-      xhr.setRequestHeader('Content-Type',  file.type || 'application/octet-stream');
-      xhr.upload.onprogress = e => {
-        if (e.lengthComputable) onProgress(Math.round(e.loaded * 100 / e.total));
-      };
-      xhr.onload  = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error('HTTP ' + xhr.status)); };
-      xhr.onerror = () => reject(new Error('Network error'));
-      xhr.send(file);
-    });
-  }
-
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  // ── Progress helpers ───────────────────────────────────────────────────────
-  function setOfflineProgress(pct, label) {
-    const fill  = document.getElementById('offline-progress-fill');
-    const pctEl = document.getElementById('offline-progress-pct');
-    const lblEl = document.getElementById('offline-progress-label');
-    if (fill)  fill.style.width  = pct + '%';
-    if (pctEl) pctEl.textContent = pct + '%';
-    if (lblEl) lblEl.textContent = label || '';
-  }
-
-  function updateFileCounter(current, total, name) {
-    const counter = document.getElementById('offline-file-counter');
-    if (!counter) return;
-    if (total > 1) {
-      counter.style.display = '';
-      const c = document.getElementById('offline-file-current');
-      const t = document.getElementById('offline-file-total');
-      const n = document.getElementById('offline-file-name');
-      if (c) c.textContent = current;
-      if (t) t.textContent = total;
-      if (n) n.textContent = name;
+  window.retryOfflineTransfer = function() {
+    if (selectedDevice) {
+      document.getElementById('offline-waiting-device').textContent = selectedDevice.name;
+      showOfflineStep('waiting');
+      if (lanWs) {
+        const files = filesToSend;
+        lanWs.send(JSON.stringify({
+          type: 'transfer-request', to: selectedDevice.id,
+          files: files.map(f => ({ name: f.name, size: f.size, type: f.type })),
+        }));
+      } else {
+        setTimeout(() => startSimulatedTransfer(), 1800);
+      }
     } else {
-      counter.style.display = 'none';
-    }
-  }
-
-  // ── Receive: Accept/Decline callbacks ─────────────────────────────────────
-  // These are called when user taps Accept or Decline on the incoming overlay.
-
-  window.lanAcceptTransfer = function() {
-    const sessionId  = window._offlinePendingSessionId;
-    const senderIp   = window._offlinePendingSenderIp;
-    const senderName = window._offlinePendingSenderName;
-    if (!sessionId) return;
-
-    document.getElementById('lan-incoming-btns').style.display  = 'none';
-    document.getElementById('lan-recv-progress').style.display  = 'block';
-    document.getElementById('lan-recv-fill').style.width        = '0%';
-    document.getElementById('lan-recv-pct').textContent         = '0%';
-
-    if (isAndroid() && window.BeamNative) {
-      // Tell our own server to mark the session accepted
-      window.BeamNative.acceptIncoming(sessionId);
-    } else {
-      // Tell our own server via HTTP
-      fetch('http://localhost:' + LAN_PORT + '/accept/' + sessionId).catch(() =>
-        // If not localhost, try full URL using current host
-        fetch('http://' + window.location.hostname + ':' + LAN_PORT + '/accept/' + sessionId)
-      );
-      // File will be received automatically by server → progress via WebSocket
+      resetOfflineMode();
     }
   };
 
-  window.lanDeclineTransfer = function() {
-    const sessionId  = window._offlinePendingSessionId;
-    window._offlinePendingSessionId = null;
-    document.getElementById('lan-incoming-overlay')?.classList.remove('show');
-
-    if (isAndroid() && window.BeamNative) {
-      window.BeamNative.declineIncoming(sessionId || '');
-    } else if (sessionId) {
-      fetch('http://localhost:' + LAN_PORT + '/decline/' + sessionId).catch(() => {});
-    }
-  };
-
-  // ── Receive: native Android callback (called from MainActivity.kt) ─────────
-  window.onNativeIncomingRequest = function(sessionId, senderName, fileName, fileSize, fileCount, totalSize) {
-    window._offlinePendingSessionId = sessionId;
-    window._offlinePendingSenderName = senderName;
-
-    const fileLabel = fileCount > 1
-      ? fileCount + ' files (' + formatBytes(totalSize) + ')'
-      : fileName;
-    const metaLabel = fileCount > 1
-      ? formatBytes(totalSize) + ' total · ' + fileCount + ' files · from ' + senderName
-      : formatBytes(fileSize) + ' · from ' + senderName;
-
-    document.getElementById('lan-incoming-file').textContent = fileLabel;
-    document.getElementById('lan-incoming-meta').textContent = metaLabel;
-    document.getElementById('lan-incoming-btns').style.display  = 'flex';
-    document.getElementById('lan-recv-progress').style.display  = 'none';
-    document.getElementById('lan-recv-fill').style.width        = '0%';
-    document.getElementById('lan-recv-pct').textContent         = '0%';
-    document.getElementById('lan-incoming-overlay')?.classList.add('show');
-  };
-
-  // ── Receive: poll /pending for Mac/browser ─────────────────────────────────
-  function startPendingPoll() {
-    // Android handles via broadcast — no polling needed
-    if (isAndroid()) return;
-
-    if (pollTimer) clearInterval(pollTimer);
-
-    const baseUrl = IS_ELECTRON
-      ? 'http://localhost:' + LAN_PORT
-      : (window.location.hostname ? 'http://' + window.location.hostname + ':' + LAN_PORT : null);
-
-    if (!baseUrl) return;
-
-    const shown = new Set();
-
-    pollTimer = setInterval(async () => {
-      try {
-        const resp = await fetch(baseUrl + '/pending', { cache: 'no-store' });
-        const j    = await resp.json();
-        (j.sessions || []).forEach(s => {
-          if (shown.has(s.sessionId)) return;
-          shown.add(s.sessionId);
-
-          window._offlinePendingSessionId  = s.sessionId;
-          window._offlinePendingSenderName = s.senderName;
-          window._offlinePendingSenderIp   = s.senderIp;
-
-          const fileLabel = s.fileCount > 1
-            ? s.fileCount + ' files (' + formatBytes(s.totalSize) + ')'
-            : s.fileName;
-          const metaLabel = s.fileCount > 1
-            ? formatBytes(s.totalSize) + ' total · from ' + s.senderName
-            : formatBytes(s.fileSize) + ' · from ' + s.senderName;
-
-          document.getElementById('lan-incoming-file').textContent = fileLabel;
-          document.getElementById('lan-incoming-meta').textContent = metaLabel;
-          document.getElementById('lan-incoming-btns').style.display  = 'flex';
-          document.getElementById('lan-recv-progress').style.display  = 'none';
-          document.getElementById('lan-recv-fill').style.width        = '0%';
-          document.getElementById('lan-recv-pct').textContent         = '0%';
-          document.getElementById('lan-incoming-overlay')?.classList.add('show');
-        });
-      } catch(_) {}
-    }, 1000);
-  }
-
-  // ── Receive progress/complete (native callbacks) ───────────────────────────
-  window.onNativeTransferProgress = function(pct, filename) {
-    document.getElementById('lan-recv-fill').style.width = pct + '%';
-    document.getElementById('lan-recv-pct').textContent  = pct + '%';
-    // Also update sender-side progress if we're sending
-    const offFill = document.getElementById('offline-progress-fill');
-    const offPct  = document.getElementById('offline-progress-pct');
-    if (offFill) offFill.style.width  = pct + '%';
-    if (offPct)  offPct.textContent   = pct + '%';
-  };
-
-  window.onNativeTransferComplete = function(filename, savedPath, fromName) {
-    // Sender-side complete
-    const offStep = document.getElementById('offline-step-transfer');
-    if (offStep && offStep.style.display !== 'none') {
-      if (transferTimer) { clearTimeout(transferTimer); transferTimer = null; }
-      setOfflineProgress(100, 'Complete!');
-      setTimeout(() => {
-        document.getElementById('offline-success-detail').textContent =
-          'Sent ' + filename + ' to ' + (selectedDev?.name || 'receiver') + '.';
-        showOfflineStep('success');
-        if (typeof showPopup === 'function')
-          showPopup('✅', 'Transfer Complete!', filename + ' delivered.', 'success', 5000);
-      }, 600);
-      return;
-    }
-    // Receiver-side complete (file saved by server)
-    document.getElementById('lan-recv-fill').style.width = '100%';
-    document.getElementById('lan-recv-pct').textContent  = '100%';
-    setTimeout(() => {
-      document.getElementById('lan-incoming-overlay')?.classList.remove('show');
-      if (typeof showPopup === 'function')
-        showPopup('✅', 'File Received!', filename + ' saved to Downloads.', 'success', 6000);
-    }, 500);
-  };
-
-  window.onNativeTransferFailed = function(error) {
-    if (transferTimer) { clearTimeout(transferTimer); transferTimer = null; }
-    // Sender-side fail
-    const offStep = document.getElementById('offline-step-transfer');
-    if (offStep && offStep.style.display !== 'none') {
-      showOfflineStep('fail');
-      document.getElementById('offline-fail-detail').textContent = error;
-      return;
-    }
-    // Receiver-side fail
-    document.getElementById('lan-incoming-overlay')?.classList.remove('show');
-    if (typeof showPopup === 'function')
-      showPopup('❌', 'Transfer Failed', error, 'error', 5000);
-  };
-
-  // ── Mac LAN server WebSocket (for incoming notifications) ─────────────────
-  // Connects to own LAN server WebSocket to receive transfer-complete/incoming notifications
-  function connectMacNotificationWs() {
-    if (!IS_ELECTRON && !window.location.hostname) return;
-    const wsHost = IS_ELECTRON ? 'localhost' : window.location.hostname;
-    const ws = new WebSocket('ws://' + wsHost + ':' + LAN_PORT);
-
-    ws.onmessage = e => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'incoming-request') {
-          window.onNativeIncomingRequest(
-            msg.sessionId, msg.senderName, msg.fileName,
-            msg.fileSize, msg.fileCount, msg.totalSize
-          );
-        } else if (msg.type === 'transfer-complete') {
-          window.onNativeTransferComplete(msg.filename, msg.savedPath || '', msg.fromName || '');
-        } else if (msg.type === 'device-found') {
-          addDevice({ ip: msg.ip, name: msg.name, platform: msg.platform || 'unknown', port: msg.port || LAN_PORT });
-        } else if (msg.type === 'transfer-progress' || msg.type === 'progress') {
-          window.onNativeTransferProgress(msg.pct, msg.filename || '');
-        }
-      } catch(_) {}
-    };
-    ws.onclose = () => {
-      if (IS_ELECTRON || window.location.hostname)
-        setTimeout(connectMacNotificationWs, 3000);
-    };
-    window._beamNotifyWs = ws;
-  }
-
-  if (IS_ELECTRON || window.location.hostname) {
-    connectMacNotificationWs();
-  }
-
-  // ── QR code (Mac → shows URL so Android can connect via browser) ──────────
-  function showOfflineQR() {
-    const box    = document.getElementById('offline-android-box');
-    const urlEl  = document.getElementById('offline-android-url');
-    const qrWrap = document.getElementById('offline-qr-wrap');
-    if (!box || box.dataset.qrRendered) return;
-    box.dataset.qrRendered = '1';
-
-    async function renderQR(url) {
-      if (!url) return;
-      urlEl.textContent = url;
-      qrWrap.innerHTML  = '';
-      box.style.display = 'block';
-      const tryQR = () => {
-        if (typeof QRCode !== 'undefined') {
-          new QRCode(qrWrap, { text: url, width: 68, height: 68,
-            colorDark: '#000', colorLight: '#fff', correctLevel: QRCode.CorrectLevel.M });
-        } else { setTimeout(tryQR, 300); }
-      };
-      tryQR();
-    }
-
-    if (IS_ELECTRON) {
-      window.electronAPI?.getLanInfo?.().then(info => {
-        if (info?.ip) renderQR('http://' + info.ip + ':' + LAN_PORT);
-      }).catch(() => {});
-    }
-  }
-
-  // ── Reset ──────────────────────────────────────────────────────────────────
   window.resetOfflineMode = function() {
-    if (transferTimer)  { clearTimeout(transferTimer);   transferTimer  = null; }
-    selectedDev         = null;
-    pendingSessionId    = null;
-    window._offlinePendingSessionId = null;
-    const qrBox = document.getElementById('offline-android-box');
-    if (qrBox) { delete qrBox.dataset.qrRendered; qrBox.style.display = 'none'; }
-    setOfflineProgress(0, 'Sending…');
-    const counterEl = document.getElementById('offline-file-counter');
-    if (counterEl) counterEl.style.display = 'none';
+    if (transferTimer)  { clearInterval(transferTimer);  transferTimer  = null; }
+    if (window._offlineWaitTimer) { clearTimeout(window._offlineWaitTimer); window._offlineWaitTimer = null; }
+    if (window._offlineDiscoveryTimer) { clearTimeout(window._offlineDiscoveryTimer); window._offlineDiscoveryTimer = null; }
+    if (rtcConn)   { rtcConn.close();   rtcConn   = null; }
+    dataChannel   = null;
+    selectedDevice = null;
+    window._pendingOfflineDetect = false;
+    const fillEl  = document.getElementById('offline-progress-fill');
+    const pctEl   = document.getElementById('offline-progress-pct');
+    const labelEl = document.getElementById('offline-progress-label');
+    if (fillEl)  fillEl.style.width  = '0%';
+    if (pctEl)   pctEl.textContent   = '0%';
+    if (labelEl) labelEl.textContent = 'Sending…';
     autoDetectConnection();
   };
 
-  window.retryOfflineTransfer = function() {
-    if (selectedDev) selectOfflineDevice(selectedDev);
-    else resetOfflineMode();
+  // Manual IP connect — user types Mac IP directly
+  // Show the QR scan button only when running in the Android native app
+  if (IS_ANDROID_NATIVE) {
+    const qrBtnWrap = document.getElementById('offline-scan-qr-btn-wrap');
+    if (qrBtnWrap) qrBtnWrap.style.display = 'block';
+  }
+
+  // Triggered when user taps "Scan QR from desktop app"
+  window.beamScanQr = function() {
+    if (IS_ANDROID_NATIVE && window.BeamNative?.scanQrCode) {
+      window.BeamNative.scanQrCode();
+    } else {
+      // Fallback for browser — prompt manual URL
+      const url = prompt('Enter the URL from the QR code (e.g. http://192.168.x.x:7777)');
+      if (url) window.connectFromQrCode(url);
+    }
   };
 
-  // ── Receive section (Receive tab) ─────────────────────────────────────────
+  // Called by MainActivity after successful QR scan with the scanned URL
+  window.connectFromQrCode = async function(url) {
+    if (!url || !url.startsWith('http')) {
+      if (typeof showPopup === 'function') {
+        showPopup('❌', 'Invalid QR code', 'This QR code is not a Beam server URL.', 'error', 4000);
+      }
+      return;
+    }
+
+    // Extract IP and port from scanned URL (e.g. http://192.168.1.5:7777)
+    const match = url.match(/^https?:\/\/([^/]+)/);
+    if (!match) return;
+
+    const host = match[1]; // e.g. "192.168.1.5:7777"
+    const ip   = host.split(':')[0];
+
+    // Pre-fill the manual IP field and connect
+    const input = document.getElementById('offline-manual-ip');
+    if (input) input.value = ip;
+
+    // Show connecting feedback
+    showOfflineStep('notfound');
+    document.getElementById('offline-notfound-title').textContent = `Connecting to ${ip}…`;
+    document.getElementById('offline-notfound-msg').textContent   = 'Scanned from QR code — connecting to Beam desktop app';
+
+    // Reuse the manual connect logic
+    const wsUrl = `ws://${host}`;
+    const ws = new WebSocket(wsUrl);
+    const timeout = setTimeout(() => {
+      ws.close();
+      document.getElementById('offline-notfound-title').textContent = 'Could not connect';
+      document.getElementById('offline-notfound-msg').textContent   =
+        `Could not reach Beam at ${host}. Make sure the desktop app is open.`;
+    }, 5000);
+
+    ws.onopen = () => {
+      clearTimeout(timeout);
+      const myIdQr   = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+      const myNameQr = IS_ANDROID_NATIVE
+        ? (window.BeamNative?.getDeviceName?.() || 'Android')
+        : (navigator.platform || 'Browser');
+      ws.send(JSON.stringify({ type: 'register', id: myIdQr, name: myNameQr, deviceType: 'phone' }));
+      lanWs = ws;
+      setupLanMessageHandler(ws);
+
+      document.getElementById('offline-detect-ring').style.display = 'none';
+      document.getElementById('offline-chosen-mode-line').innerHTML =
+        `<svg class="icon" width="14" height="14"><use href="#ico-wifi"/></svg> Connected via QR scan to ${ip}`;
+      document.getElementById('offline-chosen-why').textContent =
+        'Scanned Beam desktop app QR code. Files transfer directly over WiFi.';
+      document.getElementById('offline-chosen-fallback').textContent = '';
+      document.getElementById('offline-chosen-result').style.display = 'block';
+      showOfflineStep('conn');
+
+      if (typeof showPopup === 'function') {
+        showPopup('✅', 'Connected!', `Linked to Beam at ${ip}`, 'success', 3000);
+      }
+
+      setTimeout(() => {
+        document.getElementById('offline-scanning-title').textContent = 'Searching for nearby devices…';
+        showOfflineStep('scanning');
+        setTimeout(() => { renderDeviceList(peers); showOfflineStep('devices'); }, 1000);
+      }, 1800);
+    };
+
+    ws.onerror = () => {
+      clearTimeout(timeout);
+      document.getElementById('offline-notfound-title').textContent = 'QR scan failed';
+      document.getElementById('offline-notfound-msg').textContent   =
+        `Could not connect to ${host}. Check the desktop app is running.`;
+    };
+  };
+
+  window.connectManualIp = async function() {
+    const input = document.getElementById('offline-manual-ip');
+    const ip    = (input?.value || '').trim();
+    if (!ip) return;
+
+    const wsUrl = `ws://${ip}:${LAN_PORT}`;
+    document.getElementById('offline-notfound-title').textContent = `Connecting to ${ip}…`;
+
+    return new Promise((resolve) => {
+      const ws = new WebSocket(wsUrl);
+      const timeout = setTimeout(() => { ws.close(); resolve(null); }, 5000);
+
+      ws.onopen = async () => {
+        clearTimeout(timeout);
+        // Register as peer
+        const myIdLocal   = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+        const myNameLocal = IS_ANDROID_NATIVE
+          ? (window.BeamNative?.getDeviceName?.() || navigator.platform || 'Mobile')
+          : (navigator.platform || 'Browser');
+        ws.send(JSON.stringify({ type: 'register', id: myIdLocal, name: myNameLocal, deviceType: 'phone' }));
+        lanWs = ws;
+        setupLanMessageHandler(ws);
+
+        // Update chosen result and proceed
+        document.getElementById('offline-detect-ring').style.display = 'none';
+        document.getElementById('offline-chosen-mode-line').innerHTML =
+          `<svg class="icon" width="14" height="14"><use href="#ico-wifi"/></svg> WiFi — Connected to ${ip}`;
+        document.getElementById('offline-chosen-why').textContent =
+          `Manually connected to ${ip}:${LAN_PORT}. Files transfer directly over WiFi.`;
+        document.getElementById('offline-chosen-fallback').textContent = '';
+        document.getElementById('offline-chosen-result').style.display = 'block';
+        showOfflineStep('conn');
+
+        setTimeout(() => {
+          document.getElementById('offline-scanning-title').textContent = 'Searching for nearby devices…';
+          document.getElementById('offline-scan-note').textContent = 'Make sure the other device has Beam open';
+          showOfflineStep('scanning');
+          setTimeout(() => {
+            renderDeviceList(peers);
+            showOfflineStep('devices');
+            // Show QR code if Android is running its own server
+            if (IS_ANDROID_NATIVE && window.BeamNative?.isRunningServer?.()) {
+              const serverUrl = window.BeamNative.getLocalServerUrl();
+              if (serverUrl) {
+                const qrSection = document.getElementById('offline-qr-section');
+                const urlEl     = document.getElementById('offline-device-url');
+                const qrEl      = document.getElementById('offline-device-qr');
+                if (qrSection && urlEl && qrEl) {
+                  urlEl.textContent = serverUrl;
+                  qrEl.innerHTML    = '';
+                  qrSection.style.display = 'block';
+                  const tryQRManual = () => {
+                    if (typeof QRCode !== 'undefined') {
+                      new QRCode(qrEl, { text: serverUrl, width: 68, height: 68,
+                        colorDark: '#000', colorLight: '#fff', correctLevel: QRCode.CorrectLevel.M });
+                    } else { setTimeout(tryQRManual, 200); }
+                  };
+                  tryQRManual();
+                }
+              }
+            }
+          }, 1500);
+        }, 2000);
+        resolve(ws);
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timeout);
+        document.getElementById('offline-notfound-title').textContent = 'Could not connect';
+        document.getElementById('offline-notfound-msg').textContent = `Could not reach Beam at ${ip}:${LAN_PORT}. Check the IP and try again.`;
+        resolve(null);
+      };
+    });
+  };
+
+  // ── Receive tab ───────────────────────────────────────────────────────────
+
+  const _origSwitchTab = window.switchTab;
+  window.switchTab = function(id) {
+    _origSwitchTab(id);
+    const isOffline = modeOfflineCard?.classList.contains('active');
+    if (id === 'recv' && isOffline) {
+      showOfflineRecvSection();
+    } else if (id === 'recv') {
+      const ors = document.getElementById('offline-recv-section');
+      if (ors) ors.style.display = 'none';
+    }
+  };
+
   async function showOfflineRecvSection() {
     const ors = document.getElementById('offline-recv-section');
     if (!ors) return;
     ors.style.display = 'block';
     const nameEl = document.getElementById('offline-recv-device-name');
-    if (nameEl) nameEl.textContent = IS_ELECTRON
-      ? (await window.electronAPI?.getDeviceName?.() || 'This Mac')
-      : isAndroid() ? (window.BeamNative?.getDeviceName?.() || 'This Device')
-      : (navigator.platform || 'This Device');
-
-    const recvStates = ['waiting','incoming','progress','success','declined'];
-    function showRecvState(name) {
-      recvStates.forEach(s => {
-        const el = document.getElementById(s === 'progress' ? 'offline-recv-progress' : 'offline-recv-' + s);
-        if (el) el.style.display = s === name ? '' : 'none';
-      });
+    if (nameEl) {
+      nameEl.textContent = IS_ELECTRON
+        ? (await window.electronAPI.getDeviceName())
+        : (navigator.platform || 'This Device');
     }
     showRecvState('waiting');
+
+    // Wait for real incoming requests — never simulate on Android
+    if (!lanWs && !IS_ANDROID_NATIVE) {
+      setTimeout(() => simulateIncoming(), 4000);
+    }
+  }
+
+  function simulateIncoming() {
+    const sender = FAKE_DEVICES[Math.floor(Math.random() * FAKE_DEVICES.length)];
+    const files  = filesToSend;
+    const fname  = files.length > 0 ? files[0].name : 'document.pdf';
+    const fsize  = files.length > 0 ? formatBytes(files[0].size) : '4.2 MB';
+    document.getElementById('offline-incoming-sender').textContent = sender.name;
+    document.getElementById('offline-incoming-file').textContent   = fname;
+    document.getElementById('offline-incoming-size').textContent   = fsize;
+    window._offlineIncomingSender = sender;
+    window._offlineIncomingFile   = { name: fname, size: fsize };
+    showRecvState('incoming');
   }
 
   window.acceptOfflineTransfer = function() {
-    window.lanAcceptTransfer();
+    const sender = window._offlineIncomingSender || { id: null, name: 'sender' };
+
+    if (lanWs && sender.id) {
+      // Real mode: tell sender we accepted, WebRTC handshake happens via signal messages
+      lanWs.send(JSON.stringify({ type: 'transfer-accept', to: sender.id }));
+      showRecvState('progress');
+      document.getElementById('offline-recv-from-name').textContent = sender.name;
+    } else {
+      // Demo mode
+      document.getElementById('offline-recv-from-name').textContent = sender.name;
+      showRecvState('progress');
+      const fillEl = document.getElementById('offline-recv-fill');
+      const pctEl  = document.getElementById('offline-recv-pct');
+      let pct = 0;
+      const interval = setInterval(() => {
+        pct += Math.random() * 9 + 3;
+        if (pct >= 100) {
+          pct = 100;
+          clearInterval(interval);
+          fillEl.style.width = '100%';
+          pctEl.textContent  = '100%';
+          setTimeout(() => {
+            const f = window._offlineIncomingFile || { name: 'file', size: '—' };
+            document.getElementById('offline-recv-success-detail').textContent =
+              `${f.name} received from ${sender.name}. (Demo mode)`;
+            showRecvState('success');
+            if (typeof showPopup === 'function') {
+              showPopup('✅', 'File Received!', `${f.name} received.`, 'success', 5000);
+            }
+          }, 500);
+        } else {
+          fillEl.style.width = pct + '%';
+          pctEl.textContent  = Math.round(pct) + '%';
+        }
+      }, 160);
+    }
   };
+
   window.declineOfflineTransfer = function() {
-    window.lanDeclineTransfer();
+    const sender = window._offlineIncomingSender;
+    if (lanWs && sender?.id) {
+      lanWs.send(JSON.stringify({ type: 'transfer-decline', to: sender.id }));
+    }
+    showRecvState('declined');
+    if (typeof showPopup === 'function') {
+      showPopup('⊘', 'Transfer Declined', 'You declined the incoming file.', 'warn', 3000);
+    }
   };
+
   window.resetOfflineRecv = function() {
-    window._offlinePendingSessionId = null;
-    document.getElementById('lan-incoming-overlay')?.classList.remove('show');
+    const fillEl = document.getElementById('offline-recv-fill');
+    const pctEl  = document.getElementById('offline-recv-pct');
+    if (fillEl) fillEl.style.width = '0%';
+    if (pctEl)  pctEl.textContent  = '0%';
+    recvBuffer = []; recvMeta = null; recvChunksGot = 0;
+    showRecvState('waiting');
+    if (!lanWs && !IS_ANDROID_NATIVE) setTimeout(() => simulateIncoming(), 3500);
   };
 
 })();
 
-/* ── Global: LAN incoming download queue & progress bar ─────────────────────
- * These globals are preserved from old code since the HTML overlay references
- * them. Mac-side downloads now happen server-side (saved directly to Downloads)
- * so the queue is only used for legacy browser-based receive.               */
+/* ── Global LAN incoming transfer handlers ──────────────────────────────────── */
+/* These work regardless of which tab / mode is active on the receiving device   */
 
-let _dlQueue   = [];
-let _dlActive  = false;
-let _dlDone    = 0;
-let _dlTotal   = 0;
-let _dlSucceeded = 0;
-let _dlFailed  = [];
-let _dlFromName = '';
+window.lanAcceptTransfer = function() {
+  const sender = window._offlineIncomingSender;
+  if (!sender) return;
 
-function triggerHttpDownload(url, filename, fromName) {
-  fetch(url)
-    .then(r => {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.blob();
-    })
-    .then(blob => {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      document.body.appendChild(a); a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(a.href);
-      _dlSucceeded++;
-      document.getElementById('lan-incoming-overlay')?.classList.remove('show');
-      if (typeof showPopup === 'function')
-        showPopup('✅', 'Received!', filename + ' saved.', 'success', 5000);
-    })
-    .catch(err => {
-      if (typeof showPopup === 'function')
-        showPopup('❌', 'Download failed', err.message, 'error', 5000);
-    });
+  // Hide buttons, show progress bar
+  document.getElementById('lan-incoming-btns').style.display = 'none';
+  document.getElementById('lan-recv-progress').style.display = 'block';
+
+  if (window._lanWsRef && sender.id) {
+    // Real mode — tell sender we accepted
+    window._lanWsRef.send(JSON.stringify({ type: 'transfer-accept', to: sender.id }));
+    // Progress will be updated via handleIncomingRtcConnection / onmessage inside initOfflineMode
+  } else {
+    // Demo mode simulation
+    const fillEl = document.getElementById('lan-recv-fill');
+    const pctEl  = document.getElementById('lan-recv-pct');
+    let pct = 0;
+    const iv = setInterval(() => {
+      pct += Math.random() * 9 + 3;
+      if (pct >= 100) {
+        pct = 100; clearInterval(iv);
+        fillEl.style.width = '100%'; pctEl.textContent = '100%';
+        setTimeout(() => {
+          document.getElementById('lan-incoming-overlay').classList.remove('show');
+          if (typeof showPopup === 'function') {
+            const f = window._offlineIncomingFile || { name: 'file' };
+            showPopup('✅', 'File Received!', `${f.name} saved to Downloads.`, 'success', 5000);
+          }
+        }, 600);
+      } else {
+        fillEl.style.width = pct + '%';
+        pctEl.textContent  = Math.round(pct) + '%';
+      }
+    }, 160);
+  }
+};
+
+window.lanDeclineTransfer = function() {
+  const sender = window._offlineIncomingSender;
+  if (window._lanWsRef && sender?.id) {
+    window._lanWsRef.send(JSON.stringify({ type: 'transfer-decline', to: sender.id }));
+  }
+  document.getElementById('lan-incoming-overlay').classList.remove('show');
+  if (typeof showPopup === 'function') {
+    showPopup('⊘', 'Transfer Declined', 'You declined the incoming file.', 'warn', 3000);
+  }
+};
+
+/* ── HTTP download helper ────────────────────────────────────────────────────── */
+/* ── Download queue — sequential, with failure tracking and retry ────────────── */
+const _dlQueue      = [];   // { url, filename } pending
+const _dlFailed     = [];   // { url, filename, reason } failed
+let   _dlActive     = false;
+let   _dlTotal      = 0;    // total files expected in this batch
+let   _dlDone       = 0;    // files attempted so far
+let   _dlSucceeded  = 0;    // files successfully saved
+let   _dlFromName   = '';
+
+// Detect Android native app — BeamNative is injected by BeamWebInterface.kt
+const IS_ANDROID_NATIVE = typeof window.BeamNative !== 'undefined' ||
+                          !!window.__BEAM_NATIVE_ANDROID__;
+
+function triggerHttpDownload(url, filename, fromName, filesize) {
+  if (fromName) _dlFromName = fromName;
+  if (_dlTotal === 0) _dlTotal = 1;
+  _dlQueue.push({ url, filename, fromName: fromName || _dlFromName, filesize: filesize || 0 });
+  _processDlQueue();
 }
 
 function _processDlQueue() {
   if (_dlActive || _dlQueue.length === 0) return;
   _dlActive = true;
-  const item = _dlQueue.shift();
-  triggerHttpDownload(item.url, item.filename, item.fromName);
+
+  const { url, filename, fromName, filesize } = _dlQueue.shift();
+  const fillEl = document.getElementById('lan-recv-fill');
+  const pctEl  = document.getElementById('lan-recv-pct');
+
+  // Update overlay header — "File 2 of 3: photo2.jpg"
+  _dlDone++;
+  const fileEl = document.getElementById('lan-incoming-file');
+  if (fileEl) {
+    fileEl.textContent = _dlTotal > 1
+      ? `File ${_dlDone} of ${_dlTotal}: ${filename}`
+      : filename;
+  }
+
+  // Show progress bar, hide retry section while downloading
+  document.getElementById('lan-recv-progress').style.display = 'block';
+  document.getElementById('lan-retry-section').style.display = 'none';
+
+  // Reset progress bar
+  fillEl.style.width = '5%'; pctEl.textContent = '5%';
+
+  // ── Path A: Android native app — hand off to Kotlin Foreground Service ──
+  // The Foreground Service keeps running when screen is off, shows a
+  // persistent notification, and calls window.onNativeTransferComplete when done.
+  if (IS_ANDROID_NATIVE && window.BeamNative) {
+    try {
+      const urlObj       = new URL(url);
+      const downloadPath = urlObj.pathname;
+      const lanHost      = urlObj.host;
+      window.BeamNative.acceptTransfer(
+        fromName || _dlFromName || '',
+        filename,
+        filesize || 0,
+        downloadPath,
+        lanHost
+      );
+      // Completion is handled by window.onNativeTransferComplete callback below
+    } catch (err) {
+      // BeamNative call failed — fall through to fetch()
+      console.warn('[beam] BeamNative.acceptTransfer failed, falling back to fetch:', err);
+      _doFetchDownload(url, filename, fromName, filesize, fillEl, pctEl);
+    }
+    return;
+  }
+
+  // ── Path B: Browser / Electron — use fetch() ─────────────────────────────
+  _doFetchDownload(url, filename, fromName, filesize, fillEl, pctEl);
 }
 
+function _doFetchDownload(url, filename, fromName, filesize, fillEl, pctEl) {
+  let pct = 5;
+  const iv = setInterval(() => {
+    pct = Math.min(pct + Math.random() * 12 + 3, 90);
+    fillEl.style.width = pct + '%'; pctEl.textContent = Math.round(pct) + '%';
+  }, 300);
+
+  fetch(url)
+    .then(r => {
+      if (!r.ok) throw new Error(`Server error ${r.status} — file may have expired`);
+      return r.blob();
+    })
+    .then(blob => {
+      clearInterval(iv);
+      fillEl.style.width = '100%'; pctEl.textContent = '100%';
+
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename || 'beam-file';
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+
+      _dlSucceeded++;
+      _dlActive = false;
+
+      if (_dlQueue.length > 0) {
+        setTimeout(_processDlQueue, 400);
+      } else {
+        _onBatchComplete();
+      }
+    })
+    .catch(err => {
+      clearInterval(iv);
+      fillEl.style.width = '0%'; pctEl.textContent = '0%';
+      _dlFailed.push({ url, filename, fromName: fromName || '', filesize: filesize || 0, reason: err.message });
+      _dlActive = false;
+
+      if (_dlQueue.length > 0) {
+        if (typeof showPopup === 'function') {
+          showPopup('⚠️', `Skipped: ${filename}`, err.message, 'warn', 4000);
+        }
+        setTimeout(_processDlQueue, 400);
+      } else {
+        _onBatchComplete();
+      }
+    });
+}
+
+// ── Callbacks from Kotlin — called by MainActivity.kt via evaluateJavascript ──
+
+window.onNativeTransferComplete = function(filename, savedPath, fromName) {
+  const fillEl = document.getElementById('lan-recv-fill');
+  const pctEl  = document.getElementById('lan-recv-pct');
+  if (fillEl) { fillEl.style.width = '100%'; }
+  if (pctEl)  { pctEl.textContent  = '100%'; }
+
+  _dlSucceeded++;
+  _dlActive = false;
+
+  if (_dlQueue.length > 0) {
+    setTimeout(_processDlQueue, 400);
+  } else {
+    _onBatchComplete();
+  }
+};
+
+window.onNativeTransferProgress = function(pct, filename) {
+  const fillEl = document.getElementById('lan-recv-fill');
+  const pctEl  = document.getElementById('lan-recv-pct');
+  if (fillEl) fillEl.style.width = pct + '%';
+  if (pctEl)  pctEl.textContent  = pct + '%';
+};
+
+window.onNativeTransferFailed = function(error) {
+  const fillEl = document.getElementById('lan-recv-fill');
+  const pctEl  = document.getElementById('lan-recv-pct');
+  if (fillEl) { fillEl.style.width = '0%'; }
+  if (pctEl)  { pctEl.textContent  = '0%'; }
+
+  // Find the file that was being attempted
+  const currentFile = document.getElementById('lan-incoming-file')?.textContent?.split(':').pop().trim() || 'unknown';
+  _dlFailed.push({ url: '', filename: currentFile, reason: error });
+  _dlActive = false;
+
+  if (_dlQueue.length > 0) {
+    if (typeof showPopup === 'function') {
+      showPopup('⚠️', `Skipped: ${currentFile}`, error, 'warn', 4000);
+    }
+    setTimeout(_processDlQueue, 400);
+  } else {
+    _onBatchComplete();
+  }
+};
+
+function _onBatchComplete() {
+  const succeeded = _dlSucceeded;
+  const failed    = _dlFailed.length;
+
+  if (failed === 0) {
+    // All succeeded — close overlay, show success popup
+    const label = succeeded > 1 ? `${succeeded} files` : document.getElementById('lan-incoming-file')?.textContent?.split(':').pop().trim() || 'file';
+    setTimeout(() => {
+      document.getElementById('lan-incoming-overlay').classList.remove('show');
+      if (typeof showPopup === 'function') {
+        showPopup('✅', `${label} received!`,
+          `Saved to Downloads${_dlFromName ? ' · from ' + _dlFromName : ''}.`,
+          'success', 6000);
+      }
+      _resetDlState();
+    }, 500);
+  } else {
+    // Some failed — show retry section inside overlay
+    document.getElementById('lan-recv-progress').style.display = 'none';
+
+    // Update header
+    const fileEl = document.getElementById('lan-incoming-file');
+    if (fileEl) {
+      fileEl.textContent = succeeded > 0
+        ? `${succeeded} received, ${failed} failed`
+        : `${failed} file${failed !== 1 ? 's' : ''} failed to transfer`;
+    }
+    const metaEl = document.getElementById('lan-incoming-meta');
+    if (metaEl) metaEl.textContent = `From ${_dlFromName || 'sender'} — tap Retry to try again`;
+
+    // Build retry list
+    const retryList = document.getElementById('lan-retry-list');
+    if (retryList) {
+      retryList.innerHTML = _dlFailed.map((f, i) => `
+        <div class="lan-retry-item">
+          <div class="lan-retry-item-info">
+            <div class="lan-retry-item-name">${f.filename}</div>
+            <div class="lan-retry-item-reason">${f.reason}</div>
+          </div>
+          <button class="lan-retry-item-btn" onclick="retrySingleDownload(${i})">Retry</button>
+        </div>
+      `).join('');
+    }
+
+    document.getElementById('lan-retry-section').style.display = 'block';
+
+    // Notify with warning
+    if (typeof showPopup === 'function' && succeeded > 0) {
+      showPopup('⚠️', `${succeeded} received, ${failed} failed`,
+        'Tap "Retry all failed" to try again.', 'warn', 6000);
+    }
+  }
+}
+
+function _resetDlState() {
+  _dlTotal = 0; _dlDone = 0; _dlSucceeded = 0;
+  _dlFailed.length = 0; _dlFromName = '';
+}
+
+// ── Retry functions ──────────────────────────────────────────────────────────
+
+window.retrySingleDownload = function(failedIndex) {
+  const item = _dlFailed[failedIndex];
+  if (!item) return;
+  _dlFailed.splice(failedIndex, 1);
+  _dlTotal = _dlTotal || 1;
+  _dlQueue.push({ url: item.url, filename: item.filename, fromName: item.fromName || '', filesize: item.filesize || 0 });
+
+  // Hide retry section, show progress
+  document.getElementById('lan-retry-section').style.display = 'none';
+  document.getElementById('lan-recv-progress').style.display = 'block';
+  _processDlQueue();
+};
+
+window.retryAllFailedDownloads = function() {
+  if (_dlFailed.length === 0) return;
+  const toRetry = _dlFailed.splice(0, _dlFailed.length); // move all to retry
+  _dlDone      = _dlSucceeded;                            // resume counter from where we left off
+  toRetry.forEach(f => _dlQueue.push({ url: f.url, filename: f.filename, fromName: f.fromName || '', filesize: f.filesize || 0 }));
+
+  document.getElementById('lan-retry-section').style.display = 'none';
+  document.getElementById('lan-recv-progress').style.display = 'block';
+  _processDlQueue();
+};
+
+window.dismissRetrySection = function() {
+  document.getElementById('lan-incoming-overlay').classList.remove('show');
+  document.getElementById('lan-retry-section').style.display = 'none';
+  _resetDlState();
+  if (typeof showPopup === 'function' && _dlSucceeded > 0) {
+    showPopup('ℹ️', 'Partial transfer', `${_dlSucceeded} file(s) saved. Failed files were dismissed.`, 'warn', 4000);
+  }
+};
+
+/* ── Auto-connect to LAN server when loaded from a LAN URL (Android / browser) ─ */
+
+(function autoConnectIfLanServer() {
+  // Only run in browser/Android context — Electron handles its own connection
+  if (window.electronAPI) return;
+
+  const LAN_PORT   = 7777;
+  const myId       = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+  const myName     = (window.BeamNative?.getDeviceName?.() || navigator.platform || 'Mobile Device');
+  const deviceType = navigator.maxTouchPoints > 0 ? 'phone' : 'laptop';
+
+  // ── Resolve the WebSocket URL ──────────────────────────────────────────────
+  // Android native app: URL comes from NSD/mDNS discovery via BeamNative
+  // Browser served from LAN: use window.location.hostname
+  let wsUrl = null;
+
+  if (window.BeamNative || window.__BEAM_NATIVE_ANDROID__) {
+    // If Android IS the server, do NOT create a background connection to its own
+    // server here. That would register a second peer (different ID, navigator.platform
+    // as name = "Linux armv8l") which then appears as a fake device in the list.
+    // initOfflineMode handles the connection when the user activates Offline mode.
+    if (window.BeamNative?.isRunningServer?.()) return;
+
+    // Android native app — get discovered URL from LanDiscovery.kt
+    const httpUrl = window.BeamNative?.getLanServerUrl?.() || '';
+    if (httpUrl) {
+      wsUrl = httpUrl.replace(/^http/, 'ws');
+    } else {
+      // Not yet discovered — wait for onLanServerFound callback
+      const _prev = window.onLanServerFound;
+      window.onLanServerFound = function(url) {
+        if (_prev) _prev(url);
+        // Re-run this function now that we have the URL
+        window.__beamLanUrl = url.replace(/^http/, 'ws');
+        autoConnectWithUrl(window.__beamLanUrl);
+      };
+      return;
+    }
+  } else {
+    // Browser served from Beam LAN server
+    const origin = window.location.origin;
+    const isFromLanServer =
+      origin && origin !== 'null' &&
+      !origin.includes('localhost') &&
+      !origin.includes('127.0.0.1') &&
+      !origin.includes('github.io') &&
+      !origin.includes('pages') &&
+      !!window.location.hostname;
+
+    if (!isFromLanServer) return;
+    wsUrl = `ws://${window.location.hostname}:${LAN_PORT}`;
+  }
+
+  autoConnectWithUrl(wsUrl);
+
+  function autoConnectWithUrl(wsUrl) {
+  const ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'register', id: myId, name: myName, deviceType }));
+    window._lanWsRef = ws;
+
+    // Show connected banner
+    const banner = document.getElementById('lan-connected-banner');
+    if (banner) banner.style.display = 'flex';
+  };
+
+  ws.onmessage = event => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+
+    if (msg.type === 'transfer-request') {
+      // Sender is asking — show Accept/Decline overlay
+      const files = msg.files || [];
+      const f     = files[0];
+      const totalSize = files.reduce((s, x) => s + (x.size || 0), 0);
+      const sizeStr   = totalSize < 1048576
+        ? (totalSize / 1024).toFixed(1) + ' KB'
+        : (totalSize / 1048576).toFixed(1) + ' MB';
+      const fileLabel = files.length > 1
+        ? `${files.length} files (${sizeStr})`
+        : (f ? f.name : 'File');
+      const metaLabel = files.length > 1
+        ? `${sizeStr} total · ${files.length} files · from ${msg.fromName}`
+        : `${sizeStr} · from ${msg.fromName}`;
+
+      window._offlineIncomingSender  = { id: msg.from, name: msg.fromName };
+      window._offlineIncomingFile    = f;
+      window._offlineIncomingFiles   = files;
+      window._lanPendingDownloadUrl  = null;
+
+      document.getElementById('lan-incoming-file').textContent = fileLabel;
+      document.getElementById('lan-incoming-meta').textContent = metaLabel;
+      document.getElementById('lan-incoming-btns').style.display   = 'flex';
+      document.getElementById('lan-recv-progress').style.display   = 'none';
+      document.getElementById('lan-recv-fill').style.width          = '0%';
+      document.getElementById('lan-recv-pct').textContent           = '0%';
+      document.getElementById('lan-incoming-overlay').classList.add('show');
+    }
+
+    if (msg.type === 'file-ready') {
+      // File is ready on the LAN server — add to download queue
+      const downloadUrl = `http://${window.location.hostname}:${LAN_PORT}${msg.downloadUrl}`;
+      const fileIndex   = msg.fileIndex  ?? 0;
+      const totalFiles  = msg.totalFiles ?? 1;
+      const fromName    = msg.fromName   || '';
+
+      // Initialise batch tracking on first file of a batch
+      if (fileIndex === 0) {
+        _dlQueue.length = 0;
+        _dlActive  = false;
+        _dlDone    = 0;
+        _dlTotal   = totalFiles;
+        _dlFromName = fromName;
+      }
+
+      // Push this file into the queue
+      _dlQueue.push({ url: downloadUrl, filename: msg.filename, fromName: msg.fromName || '', filesize: msg.filesize || 0 });
+
+      // Make sure overlay is visible with progress bar shown
+      const overlay = document.getElementById('lan-incoming-overlay');
+      document.getElementById('lan-incoming-btns').style.display = 'none';
+      document.getElementById('lan-recv-progress').style.display = 'block';
+      if (!overlay.classList.contains('show')) overlay.classList.add('show');
+
+      // Update header to reflect total
+      document.getElementById('lan-incoming-file').textContent =
+        totalFiles > 1
+          ? `Receiving ${totalFiles} files from ${fromName}…`
+          : `Receiving ${msg.filename} from ${fromName}…`;
+
+      // Start processing (safe to call multiple times — guarded by _dlActive flag)
+      _processDlQueue();
+    }
+
+    if (msg.type === 'signal' && window._lanRtcConn) {
+      const pc = window._lanRtcConn;
+      const { data } = msg;
+      if (data.type === 'offer') {
+        pc.setRemoteDescription({ type: 'offer', sdp: data.sdp })
+          .then(() => pc.createAnswer())
+          .then(answer => {
+            pc.setLocalDescription(answer);
+            ws.send(JSON.stringify({ type: 'signal', to: msg.from, data: { type: 'answer', sdp: answer.sdp } }));
+          });
+      } else if (data.type === 'answer') {
+        pc.setRemoteDescription({ type: 'answer', sdp: data.sdp });
+      } else if (data.type === 'candidate') {
+        pc.addIceCandidate(data.candidate).catch(() => {});
+      }
+    }
+  };
+
+  ws.onclose = () => {
+    window._lanWsRef = null;
+    const banner = document.getElementById('lan-connected-banner');
+    if (banner) banner.style.display = 'none';
+    // Retry after 5 seconds
+    setTimeout(autoConnectIfLanServer, 5000);
+  };
+
+  // ── Accept handler ────────────────────────────────────────────────────────
+  // Sets up WebRTC receiving (for the fast path) AND falls back to HTTP
+  // automatically if Mac switches to HTTP (file-ready message arrives).
+
+  const _origAccept = window.lanAcceptTransfer;
+  window.lanAcceptTransfer = function() {
+    const sender = window._offlineIncomingSender;
+    if (!sender?.id) { _origAccept && _origAccept(); return; }
+
+    document.getElementById('lan-incoming-btns').style.display = 'none';
+    document.getElementById('lan-recv-progress').style.display = 'block';
+
+    // If HTTP file(s) already ready (file-ready arrived before user tapped Accept)
+    if (window._lanPendingDownloadUrl) {
+      triggerHttpDownload(window._lanPendingDownloadUrl,
+        window._offlineIncomingFile?.name || 'file',
+        sender.name);
+      window._lanPendingDownloadUrl = null;
+      return;
+    }
+
+    // Reset download queue state for a fresh transfer
+    _dlQueue.length = 0;
+    _dlActive  = false;
+    _dlDone    = 0;
+    _dlTotal   = 0;
+    _dlFromName = sender.name;
+
+    // Set up WebRTC peer connection ready to receive (Mac will send offer)
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    });
+    window._lanRtcConn = pc;
+
+    pc.onicecandidate = e => {
+      if (e.candidate) {
+        ws.send(JSON.stringify({
+          type: 'signal', to: sender.id,
+          data: { type: 'candidate', candidate: e.candidate },
+        }));
+      }
+    };
+
+    // Multi-file receive via data channel
+    pc.ondatachannel = e => {
+      const ch = e.channel;
+      ch.binaryType = 'arraybuffer';
+
+      const fillEl = document.getElementById('lan-recv-fill');
+      const pctEl  = document.getElementById('lan-recv-pct');
+
+      let recvMeta    = null;
+      let recvBuf     = [];
+      let chunksGot   = 0;
+      let filesRecvd  = 0;
+      let totalExpected = null;
+
+      ch.onmessage = async event => {
+        if (typeof event.data === 'string') {
+          const msg = JSON.parse(event.data);
+
+          if (msg.done) {
+            // All files transferred via WebRTC
+            fillEl.style.width = '100%'; pctEl.textContent = '100%';
+            setTimeout(() => {
+              document.getElementById('lan-incoming-overlay').classList.remove('show');
+              if (typeof showPopup === 'function') {
+                const n = msg.totalFiles || filesRecvd;
+                showPopup('✅', 'Files Received!',
+                  `${n} file${n !== 1 ? 's' : ''} saved to Downloads.`, 'success', 6000);
+              }
+            }, 500);
+            ch.close();
+            window._lanRtcConn = null;
+            return;
+          }
+
+          if (msg.meta) {
+            recvMeta  = msg;
+            recvBuf   = [];
+            chunksGot = 0;
+            totalExpected = msg.totalFiles;
+          }
+        } else {
+          // Binary chunk
+          recvBuf.push(event.data);
+          chunksGot++;
+
+          const filePct = recvMeta
+            ? Math.round(chunksGot / recvMeta.totalChunks * 100) : 0;
+          fillEl.style.width = filePct + '%';
+          pctEl.textContent  = filePct + '%';
+
+          if (recvMeta && chunksGot >= recvMeta.totalChunks) {
+            // Reassemble and download this file
+            const total  = recvBuf.reduce((s, c) => s + c.byteLength, 0);
+            const merged = new Uint8Array(total);
+            let pos = 0;
+            recvBuf.forEach(c => { merged.set(new Uint8Array(c), pos); pos += c.byteLength; });
+
+            const blob = new Blob([merged.buffer],
+              { type: recvMeta.type || 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a   = document.createElement('a');
+            a.href = url; a.download = recvMeta.name;
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            filesRecvd++;
+            recvBuf = []; recvMeta = null; chunksGot = 0;
+          }
+        }
+      };
+    };
+
+    // Send accept — Mac will try WebRTC offer first
+    console.log('[beam-lan] Accept: WebRTC ready, sending transfer-accept to', sender.id);
+    ws.send(JSON.stringify({ type: 'transfer-accept', to: sender.id }));
+  };
+
+  } // end autoConnectWithUrl
+
+})();
 
 
+</script>
+
+<!-- Offline mode browser restriction — web browsers only, never apps -->
+<script>
+(function() {
+  function isAppEnv() {
+    return !!(window.electronAPI || window.BeamNative || window.__BEAM_NATIVE_ANDROID__);
+  }
+
+  function restrict() {
+    var card = document.getElementById('mode-offline');
+    if (card) { card.classList.add('unavailable'); card.setAttribute('aria-disabled', 'true'); }
+    var tag  = document.getElementById('offline-app-tag');
+    if (tag)  tag.style.display = 'inline-flex';
+    var warn = document.getElementById('hiw-offline-browser-warning');
+    if (warn) warn.style.display = 'block';
+  }
+
+  function unrestrict() {
+    // Remove restriction if it was applied before BeamNative was ready
+    var card = document.getElementById('mode-offline');
+    if (card) { card.classList.remove('unavailable'); card.removeAttribute('aria-disabled'); }
+    var tag  = document.getElementById('offline-app-tag');
+    if (tag)  tag.style.display = 'none';
+    var warn = document.getElementById('hiw-offline-browser-warning');
+    if (warn) warn.style.display = 'none';
+  }
+
+  // Watch mode-selector so restriction re-applies when files are queued
+  var ms = document.getElementById('mode-selector');
+  if (ms) new MutationObserver(function() { if (!isAppEnv()) restrict(); })
+            .observe(ms, { attributes: true, attributeFilter: ['style'] });
+
+  // Retry every 300ms for 5s
+  // If app env detected at any point — remove restriction and stop
+  // If never detected — apply restriction
+  var n = 0;
+  var iv = setInterval(function() {
+    if (isAppEnv()) {
+      unrestrict();      // ← KEY FIX: remove any restriction already applied
+      clearInterval(iv);
+      return;
+    }
+    restrict();
+    if (++n >= 17) clearInterval(iv); // ~5s
+  }, 300);
+})();
 </script>
 </body>
 </html>

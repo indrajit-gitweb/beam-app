@@ -12,7 +12,6 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
-import android.view.WindowManager
 import android.view.View
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -34,73 +33,108 @@ class MainActivity : AppCompatActivity() {
     private var beamLanServer: BeamLanServer? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
-    // ── File chooser callback — set when WebView requests a file picker ──────
+    // ── File chooser ──────────────────────────────────────────────────────────
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
 
-    // Launches the system file picker and returns result to WebView
     private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        fileChooserCallback?.onReceiveValue(
-            WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
-                ?: emptyArray()
-        )
+        val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+            ?: emptyArray()
+        fileChooserCallback?.onReceiveValue(uris)
         fileChooserCallback = null
+        // Store for native background upload — avoids loading into JS memory
+        if (uris.isNotEmpty()) beamWebInterface.storeSelectedUris(uris)
     }
 
-    // ── Listen for transfer completion from the Foreground Service ───────────
-    private val transferReceiver = object : BroadcastReceiver() {
+    // ── Broadcast receiver ─────────────────────────────────────────────────────
+    private val broadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
-                BeamTransferService.ACTION_TRANSFER_COMPLETE -> {
-                    val filename  = intent.getStringExtra("filename")  ?: ""
-                    val savedPath = intent.getStringExtra("savedPath") ?: ""
-                    val fromName  = intent.getStringExtra("fromName")  ?: ""
+
+                // ── Incoming transfer request from another device ─────────────
+                BeamLanServer.ACTION_INCOMING_REQUEST -> {
+                    val sessionId  = intent.getStringExtra("sessionId")  ?: return
+                    val senderName = intent.getStringExtra("senderName") ?: "Unknown"
+                    val fileName   = intent.getStringExtra("fileName")   ?: ""
+                    val fileSize   = intent.getLongExtra("fileSize", 0L)
+                    val fileCount  = intent.getIntExtra("fileCount", 1)
+                    val totalSize  = intent.getLongExtra("totalSize", fileSize)
+
                     runOnUiThread {
-                        webView.evaluateJavascript(
-                            """
+                        // Call the JavaScript callback to show the Accept/Decline popup
+                        val js = """
                             (function() {
-                                if (typeof window.onNativeTransferComplete === 'function') {
-                                    window.onNativeTransferComplete(
-                                        ${kotlinJsonEscape(filename)},
-                                        ${kotlinJsonEscape(savedPath)},
-                                        ${kotlinJsonEscape(fromName)}
+                                if (typeof window.onNativeIncomingRequest === 'function') {
+                                    window.onNativeIncomingRequest(
+                                        ${jsonStr(sessionId)},
+                                        ${jsonStr(senderName)},
+                                        ${jsonStr(fileName)},
+                                        $fileSize,
+                                        $fileCount,
+                                        $totalSize
                                     );
                                 }
-                                if (typeof showPopup === 'function') {
-                                    showPopup('✅', 'File Received!',
-                                        '${filename} saved to Downloads.', 'success', 6000);
-                                }
                             })();
-                            """.trimIndent(), null
-                        )
+                        """.trimIndent()
+                        webView.evaluateJavascript(js, null)
                     }
+
+                    // Also show a system notification in case the app is in background
+                    BeamNotificationHelper.showSimple(
+                        context,
+                        "📥 Incoming from $senderName",
+                        "Wants to send ${if (fileCount > 1) "$fileCount files" else fileName} — open Beam to accept"
+                    )
                 }
+
+                // ── Transfer progress ─────────────────────────────────────────
                 BeamTransferService.ACTION_TRANSFER_PROGRESS -> {
                     val pct      = intent.getIntExtra("pct", 0)
                     val filename = intent.getStringExtra("filename") ?: ""
                     runOnUiThread {
                         webView.evaluateJavascript(
                             "window.onNativeTransferProgress && " +
-                            "window.onNativeTransferProgress($pct, '${filename}');", null
+                            "window.onNativeTransferProgress($pct, ${jsonStr(filename)});", null
                         )
                     }
                 }
+
+                // ── Transfer complete ──────────────────────────────────────────
+                BeamTransferService.ACTION_TRANSFER_COMPLETE -> {
+                    val filename  = intent.getStringExtra("filename")  ?: ""
+                    val savedPath = intent.getStringExtra("savedPath") ?: ""
+                    val fromName  = intent.getStringExtra("fromName")  ?: ""
+                    runOnUiThread {
+                        webView.evaluateJavascript(
+                            """(function(){
+                                window.onNativeTransferComplete && window.onNativeTransferComplete(
+                                    ${jsonStr(filename)}, ${jsonStr(savedPath)}, ${jsonStr(fromName)});
+                                typeof showPopup === 'function' && showPopup(
+                                    '✅','File Received!','${filename} saved to Downloads.','success',6000);
+                            })();""", null
+                        )
+                    }
+                }
+
+                // ── Transfer failed ───────────────────────────────────────────
                 BeamTransferService.ACTION_TRANSFER_FAILED -> {
                     val error = intent.getStringExtra("error") ?: "Unknown error"
                     runOnUiThread {
                         webView.evaluateJavascript(
                             "window.onNativeTransferFailed && " +
-                            "window.onNativeTransferFailed('${error}');", null
+                            "window.onNativeTransferFailed(${jsonStr(error)});", null
                         )
                     }
                 }
+
+                // ── LAN server discovered via NSD ─────────────────────────────
                 LanDiscovery.ACTION_SERVER_FOUND -> {
-                    val url = intent.getStringExtra("url") ?: ""
+                    val url = intent.getStringExtra("url") ?: return
                     beamWebInterface.setLanServerUrl(url)
                     runOnUiThread {
                         webView.evaluateJavascript(
-                            "window.onLanServerFound && window.onLanServerFound('${url}');", null
+                            "window.onLanServerFound && window.onLanServerFound(${jsonStr(url)});", null
                         )
                     }
                 }
@@ -111,6 +145,8 @@ class MainActivity : AppCompatActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* handled silently */ }
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -126,11 +162,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
-                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
@@ -147,8 +183,7 @@ class MainActivity : AppCompatActivity() {
             mediaPlaybackRequiresUserGesture = false
         }
 
-        WebView.setWebContentsDebuggingEnabled(true) // disable before Play Store release
-
+        WebView.setWebContentsDebuggingEnabled(true)
         webView.addJavascriptInterface(beamWebInterface, "BeamNative")
 
         webView.webViewClient = object : WebViewClient() {
@@ -157,30 +192,22 @@ class MainActivity : AppCompatActivity() {
                 webView.visibility     = View.VISIBLE
                 webView.evaluateJavascript("window.__BEAM_NATIVE_ANDROID__ = true;", null)
             }
-            override fun shouldOverrideUrlLoading(
-                view: WebView, request: WebResourceRequest
-            ): Boolean = false
+            override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest) = false
         }
 
-        // ── WebChromeClient with file chooser support ─────────────────────────
-        // Without overriding onShowFileChooser, tapping the drop zone on Android
-        // does nothing — the file picker never opens.
         webView.webChromeClient = object : WebChromeClient() {
             override fun onShowFileChooser(
                 webView: WebView,
                 filePathCallback: ValueCallback<Array<Uri>>,
                 fileChooserParams: FileChooserParams
             ): Boolean {
-                // Cancel any previous pending callback
                 fileChooserCallback?.onReceiveValue(emptyArray())
                 fileChooserCallback = filePathCallback
-
                 return try {
                     filePickerLauncher.launch(fileChooserParams.createIntent())
                     true
                 } catch (e: Exception) {
-                    fileChooserCallback = null
-                    false
+                    fileChooserCallback = null; false
                 }
             }
         }
@@ -190,37 +217,30 @@ class MainActivity : AppCompatActivity() {
 
     private fun startLanServer() {
         try {
-            val name   = android.os.Build.MODEL
-            val server = BeamLanServer(this, name)
+            val server = BeamLanServer(this, android.os.Build.MODEL)
             server.start()
             beamWebInterface.setLanServer(server)
-            // Announce via NSD so other Beam devices auto-discover this phone
-            lanDiscovery.registerService(BeamLanServer.PORT, name)
+            lanDiscovery.registerService(BeamLanServer.PORT, android.os.Build.MODEL)
             beamLanServer = server
-            Log.d("MainActivity", "LAN server started: ${server.getServerUrl()}")
+            Log.d("MainActivity", "LAN server: ${server.getServerUrl()}")
 
-            // Acquire WakeLock + request battery optimization exemption
+            // WakeLock — keeps CPU alive for the server thread
             val pm = getSystemService(POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "Beam::LanServerWakeLock"
-            ).apply { acquire(60 * 60 * 1000L) }
-            Log.d("MainActivity", "WakeLock acquired")
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Beam::LanServerWakeLock")
+                .apply { acquire(60 * 60 * 1000L) }
 
-            // Request battery optimization exemption — prevents Realme/OPPO
-            // OplusProxyWakeLock from force-releasing our WakeLock
+            // Battery optimization exemption — prevents Realme/OPPO from freezing us
             if (!pm.isIgnoringBatteryOptimizations(packageName)) {
                 try {
-                    val intent = android.content.Intent(
+                    startActivity(Intent(
                         Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        android.net.Uri.parse("package:$packageName")
-                    )
-                    startActivity(intent)
+                        Uri.parse("package:$packageName")
+                    ))
                 } catch (e: Exception) {
-                    Log.w("MainActivity", "Cannot request battery exemption: ${e.message}")
+                    Log.w("MainActivity", "Battery exemption unavailable: ${e.message}")
                 }
             }
-            // Inject server URL into WebView once page loads
+
             webView.evaluateJavascript(
                 "window.__BEAM_LOCAL_SERVER_URL__ = '${server.getServerUrl()}';", null
             )
@@ -236,16 +256,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun registerReceivers() {
         val filter = IntentFilter().apply {
+            addAction(BeamLanServer.ACTION_INCOMING_REQUEST)
             addAction(BeamTransferService.ACTION_TRANSFER_COMPLETE)
             addAction(BeamTransferService.ACTION_TRANSFER_PROGRESS)
             addAction(BeamTransferService.ACTION_TRANSFER_FAILED)
             addAction(LanDiscovery.ACTION_SERVER_FOUND)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(transferReceiver, filter, RECEIVER_NOT_EXPORTED)
+            registerReceiver(broadcastReceiver, filter, RECEIVER_NOT_EXPORTED)
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(transferReceiver, filter)
+            registerReceiver(broadcastReceiver, filter)
         }
     }
 
@@ -253,19 +274,18 @@ class MainActivity : AppCompatActivity() {
         wakeLock?.let { if (it.isHeld) it.release() }
         beamLanServer?.stop()
         beamLanServer = null
-        super.onDestroy()
-        unregisterReceiver(transferReceiver)
+        unregisterReceiver(broadcastReceiver)
         lanDiscovery.stopDiscovery()
+        super.onDestroy()
     }
 
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onBackPressed() {
-        if (webView.canGoBack()) webView.goBack()
-        else super.onBackPressed()
+        if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
 
     companion object {
-        fun kotlinJsonEscape(s: String): String =
-            "\"${s.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+        private fun jsonStr(s: String) =
+            "\"${s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n","\\n")}\""
     }
 }
