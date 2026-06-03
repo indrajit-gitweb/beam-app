@@ -2319,9 +2319,20 @@ const linkExpiredScreen  = document.getElementById('link-expired-screen');
 
 window.selectMode = function(mode) {
   currentMode = mode;
-  modePtpCard.classList.toggle('active',  mode === 'p2p');
+  modePtpCard.classList.toggle('active',   mode === 'p2p');
   modeCloudCard.classList.toggle('active', mode === 'cloud');
+  const offlineCard = document.getElementById('mode-offline');
+  if (offlineCard) offlineCard.classList.toggle('active', mode === 'offline');
+
+  // Show/hide the offline section
+  const offlineSection = document.getElementById('offline-section');
+  if (offlineSection) offlineSection.style.display = mode === 'offline' ? 'block' : 'none';
+
   expiryPicker.style.display = mode === 'cloud' ? 'block' : 'none';
+
+  // Stop offline polling when leaving offline mode
+  if (mode !== 'offline' && typeof window._stopOfflinePoll === 'function')
+    window._stopOfflinePoll();
 
   if (mode === 'p2p') {
     // Show P2P code display if peer already started
@@ -2335,6 +2346,25 @@ window.selectMode = function(mode) {
     megaErrorBox.style.display = 'none';
     cloudLinkDisplay.style.display = 'none';
     cloudUploadProg.innerHTML = '';
+  } else if (mode === 'offline') {
+    // Offline mode — hide P2P/Cloud elements, start LAN discovery
+    codeDisplay.style.display       = 'none';
+    keepOpenNote.style.display      = 'none';
+    shareVia.style.display          = 'none';
+    megaErrorBox.style.display      = 'none';
+    cloudLinkDisplay.style.display  = 'none';
+    cloudUploadProg.innerHTML       = '';
+    if (senderPeer && !activeSendConn) { senderPeer.destroy(); senderPeer = null; }
+    // Start device discovery (show scanning step immediately)
+    const offSec = document.getElementById('offline-section');
+    if (offSec) {
+      const steps = ['conn','notfound','scanning','devices','waiting','transfer','success','fail'];
+      steps.forEach(s => {
+        const el = document.getElementById('offline-step-' + s);
+        if (el) el.style.display = s === 'scanning' ? '' : 'none';
+      });
+    }
+    if (typeof window.resetOfflineMode === 'function') window.resetOfflineMode();
   } else {
     // Cloud mode — hide P2P elements
     codeDisplay.style.display = 'none';
@@ -3376,13 +3406,8 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     return type === 'phone' ? '#ico-device-phone' : '#ico-device-laptop';
   }
 
-  // ── Mode card click ────────────────────────────────────────────────────────
-  if (modeOfflineCard) {
-    modeOfflineCard.addEventListener('click', () => {
-      if (offlineSection) offlineSection.style.display = 'block';
-      autoDetectConnection();
-    });
-  }
+  // Note: mode card click is handled by selectMode('offline') in the global
+  // selectMode function which calls window.resetOfflineMode() → autoDetectConnection()
 
   // ── Main detect / scan ────────────────────────────────────────────────────
   async function autoDetectConnection() {
@@ -3444,20 +3469,23 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   }
 
   async function probeDevice(ip) {
-    const url  = 'http://' + ip + ':' + LAN_PORT + '/hello';
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 800);
-    try {
-      const res = await fetch(url, { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (!res.ok) return;
-      const h = await res.json();
-      if (!h.ok) return;
-      // Skip self
-      const selfIp = isAndroid() ? (window.BeamNative?.getLocalIp?.() || '') : '';
-      if (selfIp && ip === selfIp) return;
-      addDevice({ ip, name: h.name, platform: h.platform || 'unknown', port: h.port || LAN_PORT });
-    } catch(_) { clearTimeout(timer); }
+    // Try /hello first (new Beam), fall back to /health (older Beam versions)
+    for (const path of ['/hello', '/health']) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 800);
+      try {
+        const res = await fetch('http://' + ip + ':' + LAN_PORT + path, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!res.ok) continue;
+        const h = await res.json();
+        if (!h.ok) continue;
+        // Skip self
+        const selfIp = isAndroid() ? (window.BeamNative?.getLocalIp?.() || '') : '';
+        if (selfIp && ip === selfIp) return;
+        addDevice({ ip, name: h.name, platform: h.platform || 'mac', port: h.port || LAN_PORT });
+        return; // found, no need to try next path
+      } catch(_) { clearTimeout(timer); }
+    }
   }
 
   function addDevice(dev) {
@@ -3961,6 +3989,18 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   window.resetOfflineRecv = function() {
     window._offlinePendingSessionId = null;
     document.getElementById('lan-incoming-overlay')?.classList.remove('show');
+  };
+
+  // ── Expose helpers for native callbacks ────────────────────────────────────
+  // onLanServerFound: called by Android NSD/mDNS when a Beam device is found
+  window.onLanServerFound = function(httpUrl) {
+    const ip = httpUrl.replace(/^https?:\/\//, '').split(':')[0];
+    if (ip) probeDevice(ip);
+  };
+
+  // Stop pending poll when user leaves offline mode
+  window._stopOfflinePoll = function() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   };
 
 })();
