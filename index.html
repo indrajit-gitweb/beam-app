@@ -3897,11 +3897,23 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       switch (msg.type) {
 
         case 'peers': {
-          // Filter out ourselves
-          peers = msg.list.filter(p => p.id !== myPeerId);
+          const incoming = msg.list.filter(p => p.id !== myPeerId);
+          // Merge: add new peers, update existing, keep ones not in list (may be reconnecting)
+          incoming.forEach(p => {
+            const existing = peers.findIndex(x => x.id === p.id);
+            if (existing >= 0) peers[existing] = p;
+            else peers.push(p);
+          });
+          // Remove peers that have been absent for more than 30s
+          const now = Date.now();
+          peers.forEach(p => {
+            if (incoming.find(x => x.id === p.id)) p._lastSeen = now;
+            else if (!p._lastSeen) p._lastSeen = now;
+          });
+          peers = peers.filter(p => (now - (p._lastSeen || now)) < 30000);
+
           const devStep = document.getElementById('offline-step-devices');
           if (peers.length > 0 && (!devStep || devStep.style.display === 'none')) {
-            // A peer just connected (e.g. via QR scan) — switch to device list automatically
             renderDeviceList(peers);
             showOfflineStep('devices');
             if (typeof showPopup === 'function') {
@@ -4019,18 +4031,28 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 
     ws.onclose = () => {
       lanWs = null;
-      peers = [];
-      // Auto-reconnect after 2s if offline mode is still active
-      if (document.getElementById('offline-section')?.style.display !== 'none') {
-        setTimeout(() => {
-          if (!lanWs) {
-            console.log('[beam-lan] Reconnecting after drop…');
-            connectLanServer().then(newWs => {
-              if (newWs) { lanWs = newWs; setupLanMessageHandler(newWs); }
-            });
-          }
-        }, 2000);
+      // DO NOT clear peers — keep discovered devices visible during reconnect
+      // Only clear peers when user explicitly resets offline mode
+      // Show reconnecting indicator in device list
+      const devStep = document.getElementById('offline-step-devices');
+      if (devStep && devStep.style.display !== 'none' && peers.length > 0) {
+        const note = document.getElementById('offline-scan-note');
+        if (note) note.textContent = 'Reconnecting… devices shown above are still available';
       }
+      // Auto-reconnect silently every 3s while offline mode is open
+      const reconnect = () => {
+        if (lanWs) return; // already reconnected
+        if (document.getElementById('offline-section')?.style.display === 'none') return;
+        connectLanServer().then(newWs => {
+          if (newWs) {
+            lanWs = newWs;
+            setupLanMessageHandler(newWs);
+          } else {
+            setTimeout(reconnect, 3000);
+          }
+        });
+      };
+      setTimeout(reconnect, 2000);
     };
 
     // Send ping every 15s to keep connection alive
