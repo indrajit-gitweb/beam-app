@@ -53,6 +53,15 @@ class BeamLanServer(
     // ── HTTP ────────────────────────────────────────────────────────────────────
 
     override fun serve(session: IHTTPSession): NanoHTTPD.Response {
+        // ── WebSocket upgrade must be handled by NanoWSD (super) ──────────────
+        // If we don't delegate, our serve() override bypasses NanoWSD's
+        // WebSocket detection entirely, causing the browser to get HTTP 200
+        // instead of HTTP 101 Switching Protocols.
+        val upgradeHeader = session.headers["upgrade"]
+        if (upgradeHeader != null && upgradeHeader.lowercase().contains("websocket")) {
+            return super.serve(session)
+        }
+
         val uri    = session.uri ?: "/"
         val method = session.method
 
