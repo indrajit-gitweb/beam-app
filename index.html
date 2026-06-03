@@ -631,6 +631,16 @@
     .tg-fix { font-size: .72rem; color: var(--muted); line-height: 1.6; background: rgba(0,0,0,.2); border-radius: 6px; padding: 7px 10px; margin-top: 5px; font-family: monospace; }
 
     /* No device found state */
+    /* Beam Blaze button */
+    .beam-blaze-btn {
+      width: 100%; margin-top: 10px; padding: 11px;
+      border-radius: var(--radius-sm); border: 1px solid rgba(249,115,22,.4);
+      background: rgba(249,115,22,.07); color: #fb923c;
+      font-size: .84rem; font-weight: 700; cursor: pointer;
+      transition: background .15s, border-color .15s;
+    }
+    .beam-blaze-btn:hover { background: rgba(249,115,22,.15); border-color: #fb923c; }
+
     .offline-hotspot-tip {
       display: flex; align-items: flex-start; gap: 8px;
       margin: 12px 0 4px; padding: 10px 12px;
@@ -1116,6 +1126,65 @@
               <span><strong>No shared WiFi?</strong> One person can turn on a <strong>mobile hotspot</strong>, the other connects to it — then Offline mode works perfectly with no internet needed.</span>
             </div>
             <button class="offline-retry-scan-btn" onclick="resetOfflineMode()">🔄 Try again</button>
+            <button class="beam-blaze-btn" id="beam-blaze-launch-btn"
+                    onclick="startBeamBlaze()" style="display:none">
+              🔥 No WiFi or Hotspot? Try Beam Blaze
+            </button>
+          </div>
+        </div>
+
+        <!-- Beam Blaze: permission request screen -->
+        <div id="offline-step-blaze-perm" style="display:none">
+          <div class="offline-notfound-wrap">
+            <div class="offline-notfound-icon">🔥</div>
+            <div class="offline-notfound-title">Beam Blaze needs access</div>
+            <div class="offline-notfound-hint" style="text-align:left">
+              Beam Blaze uses <strong>Bluetooth</strong> and <strong>WiFi Direct</strong>
+              to connect directly to nearby devices — no router or internet needed.<br><br>
+              You'll see <strong>1–2 permission prompts</strong>:<br>
+              • <strong>"Nearby devices"</strong> — covers all Bluetooth access<br>
+              • <strong>"Location"</strong> — Android 9–11 only; required by the OS for
+              Bluetooth scanning (we never access your location)
+            </div>
+            <button class="offline-retry-scan-btn" onclick="requestBlazePermissions()">
+              Allow &amp; Start Beam Blaze 🔥
+            </button>
+            <button class="offline-cancel-btn" style="margin-top:8px"
+                    onclick="resetOfflineMode()">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Beam Blaze: scanning -->
+        <div id="offline-step-blaze-scan" style="display:none">
+          <div class="offline-scanning-wrap">
+            <div class="offline-scan-ring" style="border-top-color:#f97316"></div>
+            <div class="offline-scanning-title">
+              🔥 Beam Blaze — searching nearby…
+            </div>
+            <div class="offline-scan-note">
+              Open Beam on the other device and tap <strong>Beam Blaze 🔥</strong> too
+            </div>
+          </div>
+        </div>
+
+        <!-- Beam Blaze: devices found -->
+        <div id="offline-step-blaze-devices" style="display:none">
+          <div class="offline-device-list">
+            <div class="offline-device-list-title">🔥 Beam Blaze — nearby devices</div>
+            <div id="blaze-device-items"></div>
+          </div>
+        </div>
+
+        <!-- Beam Blaze: incoming connection popup (shown as overlay) -->
+        <div id="blaze-incoming-overlay" class="lan-incoming-overlay" style="display:none">
+          <div class="lan-incoming-header">
+            🔥 Beam Blaze — incoming connection
+          </div>
+          <div class="lan-incoming-file" id="blaze-incoming-name">Unknown device</div>
+          <div class="lan-incoming-meta" id="blaze-incoming-meta">wants to connect via Beam Blaze</div>
+          <div class="lan-incoming-btns">
+            <button class="lan-incoming-accept" onclick="acceptBlazeIncoming()">✓ Accept</button>
+            <button class="lan-incoming-decline" onclick="declineBlazeIncoming()">✕ Decline</button>
           </div>
         </div>
 
@@ -3650,6 +3719,8 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       // Always show the hotspot tip when no devices found — most likely cause
       // is the two devices aren't on the same network
       showHotspotTip('offline-hotspot-tip-nf');
+      // Show Beam Blaze button as fallback (Android only)
+      showBlazeButton();
     } else {
       renderDeviceList();
       showOfflineStep('devices');
@@ -4357,10 +4428,19 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // ── Reset ──────────────────────────────────────────────────────────────────
   window.resetOfflineMode = function() {
     if (transferTimer)  { clearTimeout(transferTimer);   transferTimer  = null; }
-    // Hide hotspot tips so they re-evaluate on next scan
+    // Hide hotspot tips + Blaze button so they re-evaluate on next scan
     ['offline-hotspot-tip-scan','offline-hotspot-tip-nf'].forEach(id => {
       const el = document.getElementById(id); if (el) el.style.display = 'none';
     });
+    const bBtn = document.getElementById('beam-blaze-launch-btn');
+    if (bBtn) bBtn.style.display = 'none';
+    document.getElementById('blaze-incoming-overlay').style.display = 'none';
+    blazeDevices = {};
+    blazeConnected = null;
+    blazePendingEndpoint = null;
+    if (isAndroid() && window.BeamNative) {
+      try { window.BeamNative.stopBeamBlaze(); } catch(_) {}
+    }
     selectedDev         = null;
     pendingSessionId    = null;
     window._offlinePendingSessionId = null;
@@ -4408,6 +4488,156 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     window._offlinePendingSessionId = null;
     document.getElementById('lan-incoming-overlay')?.classList.remove('show');
   };
+
+  // ── Beam Blaze — Nearby Connections UI logic ──────────────────────────────
+
+  const BLAZE_STEPS = ['conn','notfound','scanning','devices','waiting','transfer',
+                       'success','fail','blaze-perm','blaze-scan','blaze-devices'];
+
+  let blazeDevices = {};    // endpointId → name
+  let blazeConnected = null; // currently connected endpointId
+  let blazePendingEndpoint = null; // incoming connection request
+
+  function showBlazeStep(name) {
+    // Use the same STEPS array but also handle blaze-specific steps
+    BLAZE_STEPS.forEach(s => {
+      const el = document.getElementById('offline-step-' + s);
+      if (el) el.style.display = s === name ? '' : 'none';
+    });
+  }
+
+  // Show Beam Blaze button in the not-found step (Android only)
+  function showBlazeButton() {
+    if (!isAndroid()) return;
+    const btn = document.getElementById('beam-blaze-launch-btn');
+    if (btn) btn.style.display = 'block';
+  }
+
+  window.startBeamBlaze = function() {
+    showBlazeStep('blaze-perm');
+  };
+
+  window.requestBlazePermissions = function() {
+    if (isAndroid() && window.BeamNative) {
+      showBlazeStep('blaze-scan');
+      window.BeamNative.startBeamBlaze();
+    }
+  };
+
+  window.acceptBlazeIncoming = function() {
+    const ep = blazePendingEndpoint;
+    blazePendingEndpoint = null;
+    document.getElementById('blaze-incoming-overlay').style.display = 'none';
+    if (ep && window.BeamNative) window.BeamNative.acceptBlazeConnection(ep);
+  };
+
+  window.declineBlazeIncoming = function() {
+    const ep = blazePendingEndpoint;
+    blazePendingEndpoint = null;
+    document.getElementById('blaze-incoming-overlay').style.display = 'none';
+    if (ep && window.BeamNative) window.BeamNative.declineBlazeConnection(ep);
+  };
+
+  // ── Blaze callbacks from native ───────────────────────────────────────────
+
+  window.onBlazeStarted = function() {
+    blazeDevices = {};
+    showBlazeStep('blaze-scan');
+  };
+
+  window.onBlazePermissionDenied = function() {
+    showBlazeStep('blaze-perm');
+    if (typeof showPopup === 'function')
+      showPopup('⚠️', 'Permission needed',
+        'Beam Blaze needs Bluetooth and (on some Android versions) Location to find nearby devices. Please allow when prompted.',
+        'warn', 5000);
+  };
+
+  window.onBlazeDeviceFound = function(endpointId, name) {
+    blazeDevices[endpointId] = name;
+    renderBlazeDevices();
+    showBlazeStep('blaze-devices');
+  };
+
+  window.onBlazeDeviceLost = function(endpointId) {
+    delete blazeDevices[endpointId];
+    if (Object.keys(blazeDevices).length === 0) showBlazeStep('blaze-scan');
+    else renderBlazeDevices();
+  };
+
+  window.onBlazeIncoming = function(endpointId, name) {
+    blazePendingEndpoint = endpointId;
+    document.getElementById('blaze-incoming-name').textContent = name;
+    document.getElementById('blaze-incoming-meta').textContent = 'wants to send files via Beam Blaze 🔥';
+    document.getElementById('blaze-incoming-overlay').style.display = 'block';
+  };
+
+  window.onBlazeConnected = function(endpointId, name) {
+    blazeConnected = endpointId;
+    document.getElementById('blaze-incoming-overlay').style.display = 'none';
+    // Start sending files to this endpoint
+    if (filesToSend.length > 0 && window.BeamNative) {
+      document.getElementById('offline-transfer-device').textContent = name;
+      showOfflineStep('transfer');
+      window.BeamNative.blazeSendFiles(endpointId);
+    }
+  };
+
+  window.onBlazeProgress = function(pct, filename, bytes, total) {
+    window.onNativeTransferProgress(pct, filename, bytes, total);
+  };
+
+  window.onBlazeComplete = function(filename) {
+    window.onNativeTransferComplete(filename, '', '');
+  };
+
+  window.onBlazeError = function(message) {
+    window.onNativeTransferFailed(message);
+  };
+
+  window.onBlazeDisconnected = function(endpointId) {
+    blazeConnected = null;
+  };
+
+  function renderBlazeDevices() {
+    const container = document.getElementById('blaze-device-items');
+    if (!container) return;
+    container.innerHTML = '';
+    Object.entries(blazeDevices).forEach(([endpointId, name]) => {
+      const item = document.createElement('div');
+      item.className = 'offline-device-item';
+      item.innerHTML = `
+        <div class="offline-device-icon-wrap" style="background:rgba(249,115,22,.12)">
+          <svg class="offline-device-icon" viewBox="0 0 24 24" fill="none"
+               stroke="#fb923c" stroke-width="1.8" stroke-linecap="round"
+               stroke-linejoin="round" aria-hidden="true">
+            <rect x="7" y="2" width="10" height="20" rx="2"/>
+            <circle cx="12" cy="17.5" r=".8" fill="#fb923c" stroke="none"/>
+          </svg>
+        </div>
+        <div class="offline-device-info">
+          <div class="offline-device-name">${escHtml(name)}</div>
+          <div class="offline-device-sub">🔥 Beam Blaze · Direct connection</div>
+        </div>
+        <span class="offline-device-arrow">›</span>`;
+      item.addEventListener('click', () => {
+        if (filesToSend.length === 0) {
+          if (typeof showPopup === 'function')
+            showPopup('⚠️', 'No files selected', 'Drop files first, then tap a device.', 'warn', 3000);
+          return;
+        }
+        if (window.BeamNative) window.BeamNative.blazeRequestConnection(endpointId);
+        document.getElementById('offline-waiting-device').textContent = name;
+        showOfflineStep('waiting');
+      });
+      container.appendChild(item);
+    });
+  }
+
+  // Show Blaze button after failed scan
+  const _origNotFound = window.resetOfflineMode;
+  // Hook into autoDetectConnection result to show Blaze button when scan fails
+  // (done inside autoDetectConnection's notfound handler via showBlazeButton())
 
   // ── Expose helpers for native callbacks ────────────────────────────────────
   // onLanServerFound: called by Android NSD/mDNS when a Beam device is found

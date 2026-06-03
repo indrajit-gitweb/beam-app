@@ -144,6 +144,54 @@ class BeamWebInterface(private val context: Context) {
             context.startService(intent)
     }
 
+    // ── Beam Blaze (Nearby Connections) ───────────────────────────────────────
+
+    /** Start Beam Blaze mode — advertise + discover simultaneously */
+    @JavascriptInterface
+    fun startBeamBlaze() { blazeCallback?.startBlaze() }
+
+    /** Stop Beam Blaze and release all Nearby resources */
+    @JavascriptInterface
+    fun stopBeamBlaze() { blazeCallback?.stopBlaze() }
+
+    /** Sender: request connection to a discovered endpoint */
+    @JavascriptInterface
+    fun blazeRequestConnection(endpointId: String) { blazeCallback?.requestBlazeConnection(endpointId) }
+
+    /** Receiver: accept the incoming Blaze connection */
+    @JavascriptInterface
+    fun acceptBlazeConnection(endpointId: String) { blazeCallback?.acceptBlazeConnection(endpointId) }
+
+    /** Receiver: decline the incoming Blaze connection */
+    @JavascriptInterface
+    fun declineBlazeConnection(endpointId: String) { blazeCallback?.declineBlazeConnection(endpointId) }
+
+    /** Sender: send the stored file(s) to the connected endpoint */
+    @JavascriptInterface
+    fun blazeSendFiles(endpointId: String) { blazeCallback?.sendBlazeFiles(endpointId) }
+
+    // Wired up by MainActivity
+    var blazeCallback: BlazeHost? = null
+
+    interface BlazeHost {
+        fun startBlaze()
+        fun stopBlaze()
+        fun requestBlazeConnection(endpointId: String)
+        fun acceptBlazeConnection(endpointId: String)
+        fun declineBlazeConnection(endpointId: String)
+        fun sendBlazeFiles(endpointId: String)
+    }
+
+    /** Returns stored URIs for Beam Blaze to stream directly (no base64 needed) */
+    fun getStoredUris(): List<android.net.Uri> = storedUris
+
+    /** Get display name for a URI */
+    fun getUriFileName(uri: android.net.Uri): String? = try {
+        context.contentResolver.query(uri,
+            arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null
+        )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+    } catch (_: Exception) { null }
+
     /** Returns true when the device is currently on a WiFi network. */
     @JavascriptInterface
     fun isWifiConnected(): Boolean {

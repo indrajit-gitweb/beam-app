@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Network permissions -->
     <uses-permission android:name="android.permission.INTERNET"/>
@@ -26,6 +27,46 @@
         android:maxSdkVersion="28"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>
+
+    <!-- ── Beam Blaze (Google Nearby Connections) ──────────────────────────────
+         These permissions are ONLY used when the user explicitly taps
+         "Beam Blaze 🔥" — they are never requested at app launch.
+
+         WiFi permissions — needed to form a direct WiFi connection between
+         two devices without a router. Granted automatically at install,
+         no user prompt required.                                              -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
+
+    <!-- Bluetooth (Android 11 and below) — needed to discover and connect to
+         the nearby device via Bluetooth. Shows as one "Bluetooth" prompt.    -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30"/>
+
+    <!-- Bluetooth (Android 12+) — modern split permissions. Android groups
+         these into one "Nearby devices" prompt — user sees a single dialog.  -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+
+    <!-- Nearby WiFi devices (Android 13+) — allows WiFi Direct discovery
+         without requiring location permission on newer Android versions.
+         Granted automatically alongside Bluetooth scan on Android 13+.       -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="tiramisu"/>
+
+    <!-- Location (Android 9–11 only) — Android OS requires location permission
+         to use Bluetooth scanning on these versions. We do NOT use it for
+         actual location — this is an Android OS mandate we cannot remove.    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="28"/>
 
     <application
         android:allowBackup="true"

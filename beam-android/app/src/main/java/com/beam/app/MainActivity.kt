@@ -24,7 +24,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), BeamWebInterface.BlazeHost {
 
     private lateinit var webView: WebView
     private lateinit var loadingView: LinearLayout
@@ -32,6 +32,43 @@ class MainActivity : AppCompatActivity() {
     private lateinit var beamWebInterface: BeamWebInterface
     private var beamLanServer: BeamLanServer? = null
     private var wakeLock: PowerManager.WakeLock? = null
+
+    // ── Beam Blaze (Nearby Connections) ───────────────────────────────────────
+    private var beamBlaze: BeamBlazeManager? = null
+
+    // Permissions needed for Beam Blaze — requested as two grouped dialogs:
+    //   Dialog 1: "Nearby devices" → covers all Bluetooth permissions
+    //   Dialog 2: "Location"       → only on Android 9-11 (OS mandate)
+    private val blazePermissions: Array<String> get() {
+        val list = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            list += Manifest.permission.BLUETOOTH_SCAN
+            list += Manifest.permission.BLUETOOTH_ADVERTISE
+            list += Manifest.permission.BLUETOOTH_CONNECT
+        } else {
+            list += Manifest.permission.BLUETOOTH
+            list += Manifest.permission.ACCESS_FINE_LOCATION
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            list += "android.permission.NEARBY_WIFI_DEVICES"
+        }
+        return list.toTypedArray()
+    }
+
+    private val blazePermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val allGranted = results.values.all { it }
+        if (allGranted) {
+            actuallyStartBlaze()
+        } else {
+            runOnUiThread {
+                webView.evaluateJavascript(
+                    "window.onBlazePermissionDenied && window.onBlazePermissionDenied();", null
+                )
+            }
+        }
+    }
 
     // ── File chooser ──────────────────────────────────────────────────────────
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
@@ -315,6 +352,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupWebView() {
         beamWebInterface = BeamWebInterface(this)
+        beamWebInterface.blazeCallback = this   // wire up Beam Blaze
         startLanServer()
 
         with(webView.settings) {
@@ -462,6 +500,104 @@ class MainActivity : AppCompatActivity() {
     override fun onBackPressed() {
         if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
     }
+
+    // ── BeamWebInterface.BlazeHost implementation ─────────────────────────────
+
+    override fun startBlaze() {
+        val missing = blazePermissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isEmpty()) {
+            actuallyStartBlaze()
+        } else {
+            blazePermLauncher.launch(missing.toTypedArray())
+        }
+    }
+
+    private fun actuallyStartBlaze() {
+        beamBlaze?.stop()
+        val deviceName = android.os.Build.MODEL
+        beamBlaze = BeamBlazeManager(this, deviceName)
+        beamBlaze!!.start(blazeCb)
+        runOnUiThread {
+            webView.evaluateJavascript(
+                "window.onBlazeStarted && window.onBlazeStarted();", null
+            )
+        }
+    }
+
+    override fun stopBlaze() {
+        beamBlaze?.stop()
+        beamBlaze = null
+    }
+
+    override fun requestBlazeConnection(endpointId: String) {
+        beamBlaze?.requestConnection(endpointId)
+    }
+
+    override fun acceptBlazeConnection(endpointId: String) {
+        beamBlaze?.acceptConnection(endpointId)
+    }
+
+    override fun declineBlazeConnection(endpointId: String) {
+        beamBlaze?.declineConnection(endpointId)
+    }
+
+    override fun sendBlazeFiles(endpointId: String) {
+        val uris = beamWebInterface.getStoredUris()
+        if (uris.isEmpty()) {
+            runOnUiThread {
+                webView.evaluateJavascript(
+                    "window.onBlazeError && window.onBlazeError('No files selected');", null
+                )
+            }
+            return
+        }
+        // Send each stored file via Beam Blaze
+        uris.forEachIndexed { idx, uri ->
+            val name = beamWebInterface.getUriFileName(uri) ?: "file_$idx"
+            beamBlaze?.sendFile(endpointId, android.net.Uri.parse(uri.toString()), name)
+        }
+    }
+
+    // ── Beam Blaze callbacks → JavaScript ─────────────────────────────────────
+
+    private val blazeCb = object : BeamBlazeManager.BlazeCallback {
+        override fun onDeviceFound(endpointId: String, name: String) = runJs(
+            "window.onBlazeDeviceFound && window.onBlazeDeviceFound(${q(endpointId)},${q(name)});"
+        )
+        override fun onDeviceLost(endpointId: String) = runJs(
+            "window.onBlazeDeviceLost && window.onBlazeDeviceLost(${q(endpointId)});"
+        )
+        override fun onIncomingConnection(endpointId: String, name: String) = runJs(
+            "window.onBlazeIncoming && window.onBlazeIncoming(${q(endpointId)},${q(name)});"
+        )
+        override fun onConnected(endpointId: String, name: String) = runJs(
+            "window.onBlazeConnected && window.onBlazeConnected(${q(endpointId)},${q(name)});"
+        )
+        override fun onDisconnected(endpointId: String) = runJs(
+            "window.onBlazeDisconnected && window.onBlazeDisconnected(${q(endpointId)});"
+        )
+        override fun onTransferProgress(pct: Int, filename: String, bytes: Long, total: Long) = runJs(
+            "window.onBlazeProgress && window.onBlazeProgress($pct,${q(filename)},$bytes,$total);"
+        )
+        override fun onTransferComplete(filename: String) = runJs(
+            "window.onBlazeComplete && window.onBlazeComplete(${q(filename)});"
+        )
+        override fun onTransferFailed(error: String) = runJs(
+            "window.onBlazeError && window.onBlazeError(${q(error)});"
+        )
+        override fun onError(message: String) = runJs(
+            "window.onBlazeError && window.onBlazeError(${q(message)});"
+        )
+    }
+
+    /** Evaluate a JS string on the main thread */
+    private fun runJs(script: String) {
+        runOnUiThread { webView.evaluateJavascript(script, null) }
+    }
+    /** Quote a Kotlin string as a JS string literal */
+    private fun q(s: String) = "\"${s.replace("\\","\\\\").replace("\"","\\\"")}\""
 
     companion object {
         private fun jsonStr(s: String) =

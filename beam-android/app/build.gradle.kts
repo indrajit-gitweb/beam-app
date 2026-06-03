@@ -53,4 +53,8 @@ dependencies {
     // Coroutines for async operations
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+
+    // Beam Blaze — Google Nearby Connections for device-to-device transfer
+    // without WiFi or internet (Bluetooth + WiFi Direct fallback)
+    implementation("com.google.android.gms:play-services-nearby:19.3.0")
 }
