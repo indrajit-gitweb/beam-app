@@ -232,6 +232,7 @@ class BeamLanServer(
             val buf = ByteArray(64 * 1024)   // 64 KB read buffer
             var n: Int
             var total = 0L
+            var lastPct = -1   // throttle: only broadcast when % changes
 
             try {
                 if (contentLen > 0) {
@@ -244,12 +245,17 @@ class BeamLanServer(
                         fos.write(buf, 0, n)
                         total += n
                         remaining -= n
-                        // Broadcast progress so UI can show live %
+                        // Throttle: only broadcast when integer % changes (max 100 broadcasts per file)
                         val pct = (total * 100 / contentLen).toInt()
-                        context.sendBroadcast(Intent(BeamTransferService.ACTION_TRANSFER_PROGRESS).apply {
-                            putExtra("pct", pct)
-                            putExtra("filename", filename)
-                        })
+                        if (pct != lastPct) {
+                            lastPct = pct
+                            context.sendBroadcast(Intent(BeamTransferService.ACTION_TRANSFER_PROGRESS).apply {
+                                putExtra("pct",              pct)
+                                putExtra("filename",         filename)
+                                putExtra("bytesTransferred", total)
+                                putExtra("totalBytes",       contentLen)
+                            })
+                        }
                     }
                 } else {
                     while (session.inputStream.read(buf).also { n = it } != -1) {

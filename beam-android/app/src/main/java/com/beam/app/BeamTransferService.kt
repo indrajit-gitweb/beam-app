@@ -172,15 +172,19 @@ class BeamTransferService : Service() {
                             val buf = ByteArray(65_536)
                             var n: Int
                             var sent = 0L
+                            var lastPct = -1   // throttle to 1% increments
                             try {
                                 while (input.read(buf).also { n = it } != -1) {
                                     sink.write(buf, 0, n)
                                     sent += n
                                     val pct = if (size > 0) (sent * 100 / size).toInt() else 0
-                                    broadcastProgress(pct, file.name)
-                                    BeamNotificationHelper.updateProgress(
-                                        this@BeamTransferService, "Sending ${file.name}…", pct
-                                    )
+                                    if (pct != lastPct) {   // only broadcast on % change
+                                        lastPct = pct
+                                        broadcastProgress(pct, file.name, sent, size)
+                                        BeamNotificationHelper.updateProgress(
+                                            this@BeamTransferService, "Sending ${file.name}…", pct
+                                        )
+                                    }
                                 }
                             } finally { input.close() }
                         }
@@ -289,10 +293,12 @@ class BeamTransferService : Service() {
             putExtra("fromName",  fromName)
         })
 
-    internal fun broadcastProgress(pct: Int, filename: String) =
+    internal fun broadcastProgress(pct: Int, filename: String, bytesTransferred: Long = 0L, totalBytes: Long = 0L) =
         sendBroadcast(Intent(ACTION_TRANSFER_PROGRESS).apply {
-            putExtra("pct",      pct)
-            putExtra("filename", filename)
+            putExtra("pct",              pct)
+            putExtra("filename",         filename)
+            putExtra("bytesTransferred", bytesTransferred)
+            putExtra("totalBytes",       totalBytes)
         })
 
     private fun broadcastFailure(error: String) =

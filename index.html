@@ -717,6 +717,15 @@
     .offline-progress-wrap { margin-top: 6px; }
     .offline-progress-target { font-size: .78rem; color: var(--muted); margin-bottom: 12px; }
     .offline-progress-target strong { color: #34d399; }
+    .offline-speed-row {
+      display: flex; align-items: center; gap: 8px;
+      margin-top: 6px; font-size: .72rem; color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .offline-speed-row span:first-child {
+      color: #34d399; font-weight: 600; background: rgba(16,185,129,.1);
+      border: 1px solid rgba(16,185,129,.2); border-radius: 4px; padding: 1px 6px;
+    }
 
     /* Success state */
     .offline-success-wrap { text-align: center; padding: 20px 0 8px; }
@@ -955,6 +964,9 @@
     <div class="progress-track">
       <div class="progress-fill active" id="lan-recv-fill" style="width:0%"></div>
     </div>
+    <div class="offline-speed-row" id="lan-recv-speed-row" style="display:none">
+      <span id="lan-recv-speed-val">—</span><span id="lan-recv-eta-val"></span>
+    </div>
   </div>
   <!-- Retry section — shown when one or more files failed -->
   <div id="lan-retry-section" style="display:none">
@@ -1121,6 +1133,9 @@
             </div>
             <div class="progress-track">
               <div class="progress-fill active" id="offline-progress-fill" role="progressbar" style="width:0%"></div>
+            </div>
+            <div class="offline-speed-row" id="offline-speed-row" style="display:none">
+              <span id="offline-speed-val">—</span><span id="offline-eta-val"></span>
             </div>
             <!-- Fallback status message — shown when switching from WebRTC to HTTP -->
             <div class="transfer-fallback-msg" id="transfer-fallback-msg" style="display:none"></div>
@@ -3854,18 +3869,73 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }, 1000);
   }
 
+  // ── Speed / ETA helpers ────────────────────────────────────────────────────
+  let _xferStartTime = 0;
+  let _xferStartBytes = 0;
+
+  function fmtSpeed(bps) {
+    if (bps >= 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
+    if (bps >= 1024)    return Math.round(bps / 1024) + ' KB/s';
+    return Math.round(bps) + ' B/s';
+  }
+  function fmtEta(secs) {
+    if (!secs || !isFinite(secs) || secs <= 0) return '';
+    if (secs < 60)   return Math.ceil(secs) + 's left';
+    if (secs < 3600) return Math.floor(secs/60) + 'm ' + Math.ceil(secs%60) + 's left';
+    return Math.floor(secs/3600) + 'h ' + Math.floor((secs%3600)/60) + 'm left';
+  }
+
+  function applySpeedEta(speedRowId, speedValId, etaValId, speed, etaSecs) {
+    const row = document.getElementById(speedRowId);
+    if (!row) return;
+    if (speed > 0) {
+      row.style.display = 'flex';
+      const sv = document.getElementById(speedValId);
+      const ev = document.getElementById(etaValId);
+      if (sv) sv.textContent = fmtSpeed(speed);
+      if (ev) ev.textContent = fmtEta(etaSecs) ? ' · ' + fmtEta(etaSecs) : '';
+    } else {
+      row.style.display = 'none';
+    }
+  }
+
   // ── Receive progress/complete (native callbacks) ───────────────────────────
-  window.onNativeTransferProgress = function(pct, filename) {
-    document.getElementById('lan-recv-fill').style.width = pct + '%';
-    document.getElementById('lan-recv-pct').textContent  = pct + '%';
-    // Also update sender-side progress if we're sending
-    const offFill = document.getElementById('offline-progress-fill');
-    const offPct  = document.getElementById('offline-progress-pct');
-    if (offFill) offFill.style.width  = pct + '%';
-    if (offPct)  offPct.textContent   = pct + '%';
+  // bytesTransferred and totalBytes are optional (passed when available)
+  window.onNativeTransferProgress = function(pct, filename, bytesTransferred, totalBytes) {
+    const now   = Date.now();
+    const bytes = bytesTransferred || 0;
+    const total = totalBytes || 0;
+
+    // Init speed tracking on first call for this transfer
+    if (!_xferStartTime || pct === 0) { _xferStartTime = now; _xferStartBytes = bytes; }
+
+    const elapsedSec = Math.max((now - _xferStartTime) / 1000, 0.5);
+    const speed      = (bytes - _xferStartBytes) / elapsedSec;
+    const etaSecs    = (speed > 0 && total > bytes) ? (total - bytes) / speed : 0;
+
+    // Update sender-side bar (when we're the one sending)
+    const offStep = document.getElementById('offline-step-transfer');
+    if (offStep && offStep.style.display !== 'none') {
+      const fill = document.getElementById('offline-progress-fill');
+      const pctEl = document.getElementById('offline-progress-pct');
+      if (fill)  fill.style.width  = pct + '%';
+      if (pctEl) pctEl.textContent = pct + '%';
+      applySpeedEta('offline-speed-row', 'offline-speed-val', 'offline-eta-val', speed, etaSecs);
+    }
+
+    // Update receiver-side bar (when we're receiving)
+    const recvFill = document.getElementById('lan-recv-fill');
+    const recvPct  = document.getElementById('lan-recv-pct');
+    if (recvFill) recvFill.style.width  = pct + '%';
+    if (recvPct)  recvPct.textContent   = pct + '%';
+    applySpeedEta('lan-recv-speed-row', 'lan-recv-speed-val', 'lan-recv-eta-val', speed, etaSecs);
   };
 
   window.onNativeTransferComplete = function(filename, savedPath, fromName) {
+    _xferStartTime = 0; _xferStartBytes = 0; // reset speed tracking
+    ['offline-speed-row','lan-recv-speed-row'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.style.display = 'none';
+    });
     // Sender-side complete
     const offStep = document.getElementById('offline-step-transfer');
     if (offStep && offStep.style.display !== 'none') {

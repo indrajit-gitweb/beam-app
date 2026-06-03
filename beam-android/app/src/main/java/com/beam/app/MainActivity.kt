@@ -90,12 +90,14 @@ class MainActivity : AppCompatActivity() {
 
                 // ── Transfer progress ─────────────────────────────────────────
                 BeamTransferService.ACTION_TRANSFER_PROGRESS -> {
-                    val pct      = intent.getIntExtra("pct", 0)
-                    val filename = intent.getStringExtra("filename") ?: ""
+                    val pct   = intent.getIntExtra("pct", 0)
+                    val fname = intent.getStringExtra("filename") ?: ""
+                    val bytes = intent.getLongExtra("bytesTransferred", 0L)
+                    val total = intent.getLongExtra("totalBytes", 0L)
                     runOnUiThread {
                         webView.evaluateJavascript(
                             "window.onNativeTransferProgress && " +
-                            "window.onNativeTransferProgress($pct, ${jsonStr(filename)});", null
+                            "window.onNativeTransferProgress($pct,${jsonStr(fname)},$bytes,$total);", null
                         )
                     }
                 }

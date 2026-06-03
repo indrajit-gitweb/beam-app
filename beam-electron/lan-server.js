@@ -191,12 +191,28 @@ const httpServer = http.createServer((req, res) => {
       i++;
     }
 
+    const contentLen = parseInt(req.headers['content-length'] || '0', 10);
     const writeStream = fs.createWriteStream(destPath);
     let total = 0;
+    let lastPct = -1;   // throttle progress to 1% increments
 
     req.on('data', chunk => {
       total += chunk.length;
       writeStream.write(chunk);
+      // Send progress to browser via WebSocket (throttled to 1% increments)
+      if (contentLen > 0) {
+        const pct = Math.floor(total * 100 / contentLen);
+        if (pct !== lastPct) {
+          lastPct = pct;
+          const prog = JSON.stringify({
+            type: 'transfer-progress', pct, filename,
+            bytesTransferred: total, totalBytes: contentLen,
+          });
+          browsers.forEach(ws => {
+            try { if (ws.readyState === 1) ws.send(prog); } catch (_) {}
+          });
+        }
+      }
     });
 
     req.on('end', () => {
