@@ -4236,8 +4236,40 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }
 
     if (IS_ELECTRON) {
-      // Mac: get IP from IPC, fall back to WebRTC ICE candidate trick
-      window.electronAPI.getLanInfo().then(info => {
+      // Mac: multiple fallbacks to get the local IP
+      const tryGetIp = async () => {
+        // 1. Try IPC getLanInfo
+        try {
+          const info = await window.electronAPI.getLanInfo();
+          if (info && info.ip) { renderQR(`http://${info.ip}:${info.port}`); return; }
+        } catch(_) {}
+        // 2. Try health endpoint (always works — server is on localhost)
+        try {
+          const h = await fetch(`http://localhost:${LAN_PORT}/health`).then(r => r.json());
+          if (h.ok) {
+            // Use WebRTC ICE to get actual LAN IP
+            const pc = new RTCPeerConnection({iceServers:[]});
+            pc.createDataChannel('');
+            pc.createOffer().then(o => pc.setLocalDescription(o));
+            let gotIp = false;
+            pc.onicecandidate = e => {
+              if (gotIp || !e?.candidate) return;
+              const m = e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
+              if (m && !m[1].startsWith('127.') && m[1] !== '0.0.0.0') {
+                gotIp = true;
+                renderQR(`http://${m[1]}:${LAN_PORT}`);
+                pc.close();
+              }
+            };
+            setTimeout(() => { if (!gotIp) { pc.close(); renderQR(`http://localhost:${LAN_PORT}`); } }, 3000);
+          }
+        } catch(_) {}
+      };
+      tryGetIp();
+      // Also retry after LAN server starts (may take a moment)
+      setTimeout(tryGetIp, 3000);
+      if (false) { // keep old code structure below
+        window.electronAPI.getLanInfo().then(info => {
         if (info && info.ip) { renderQR(`http://${info.ip}:${info.port}`); return; }
         // Fallback: discover local IP via WebRTC
         try {
@@ -4254,7 +4286,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
           };
           setTimeout(() => pc.close(), 3000);
         } catch(_) {}
-      });
+      }); } // end if(false)
     } else if (IS_ANDROID_NATIVE && window.BeamNative?.isRunningServer?.()) {
       // Android running its own LAN server
       const url = window.BeamNative.getLocalServerUrl();

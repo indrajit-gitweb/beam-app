@@ -119,14 +119,14 @@ class BeamLanServer(
         val expiryMins = h["x-expiry-minutes"]?.toIntOrNull()?.coerceIn(10, 60) ?: 10
 
         return try {
-            val len = h["content-length"]?.toIntOrNull() ?: 0
-            val buf = ByteArray(len)
-            var read = 0
-            while (read < len) {
-                val n = session.inputStream.read(buf, read, len - read)
-                if (n < 0) break
-                read += n
+            // Stream in 4MB chunks to avoid OOM on large files
+            val out   = java.io.ByteArrayOutputStream()
+            val chunk = ByteArray(4 * 1024 * 1024)
+            var n: Int
+            while (session.inputStream.read(chunk).also { n = it } != -1) {
+                out.write(chunk, 0, n)
             }
+            val buf = out.toByteArray()
 
             val fileId = generateId()
             fileStore[fileId] = StoredFile(buf, filename, buf.size, filetype, fromPeer, targetPeer, fileIndex, totalFiles)
