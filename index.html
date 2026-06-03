@@ -4042,7 +4042,10 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         } else if (msg.type === 'device-found') {
           addDevice({ ip: msg.ip, name: msg.name, platform: msg.platform || 'unknown', port: msg.port || LAN_PORT });
         } else if (msg.type === 'transfer-progress' || msg.type === 'progress') {
-          window.onNativeTransferProgress(msg.pct, msg.filename || '');
+          window.onNativeTransferProgress(
+            msg.pct, msg.filename || '',
+            msg.bytesTransferred || 0, msg.totalBytes || 0
+          );
         }
       } catch(_) {}
     };
