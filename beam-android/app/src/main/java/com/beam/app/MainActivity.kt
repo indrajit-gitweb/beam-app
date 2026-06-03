@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import android.view.WindowManager
 import android.view.View
@@ -198,14 +199,27 @@ class MainActivity : AppCompatActivity() {
             beamLanServer = server
             Log.d("MainActivity", "LAN server started: ${server.getServerUrl()}")
 
-            // Acquire WakeLock to prevent Realme/OPPO power manager from freezing
-            // the app and killing WebSocket connections when screen turns off
+            // Acquire WakeLock + request battery optimization exemption
             val pm = getSystemService(POWER_SERVICE) as PowerManager
             wakeLock = pm.newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "Beam::LanServerWakeLock"
-            ).apply { acquire(60 * 60 * 1000L) } // up to 1 hour
-            Log.d("MainActivity", "WakeLock acquired — CPU stays awake for LAN server")
+            ).apply { acquire(60 * 60 * 1000L) }
+            Log.d("MainActivity", "WakeLock acquired")
+
+            // Request battery optimization exemption — prevents Realme/OPPO
+            // OplusProxyWakeLock from force-releasing our WakeLock
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = android.content.Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:$packageName")
+                    )
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "Cannot request battery exemption: ${e.message}")
+                }
+            }
             // Inject server URL into WebView once page loads
             webView.evaluateJavascript(
                 "window.__BEAM_LOCAL_SERVER_URL__ = '${server.getServerUrl()}';", null

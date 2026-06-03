@@ -4026,6 +4026,18 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
           window._offlineIncomingFile   = { name: msg.filename, size: msg.filesize };
           break;
         }
+
+        case 'external-server-found': {
+          // Mac's LAN server discovered Android's server via subnet scan
+          // Connect Mac to Android's server so Android can see Mac in device list
+          const extUrl = msg.url;
+          if (extUrl && !window._externalServers?.has(extUrl)) {
+            if (!window._externalServers) window._externalServers = new Set();
+            window._externalServers.add(extUrl);
+            connectToExternalServer(extUrl, msg.deviceName);
+          }
+          break;
+        }
       }
     };
 
@@ -4064,6 +4076,90 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       }
     }, 15000);
   }
+
+  // ── Connect to external Beam server (Android discovered by Mac) ──────────
+  // When Mac's subnet scan finds Android's server, Mac connects to it as a peer.
+  // This makes Mac appear in Android's device list automatically.
+
+  function connectToExternalServer(url, deviceName) {
+    const wsUrl = url.replace(/^http/, 'ws');
+    const extWs = new WebSocket(wsUrl);
+    const timeout = setTimeout(() => extWs.close(), 5000);
+
+    extWs.onopen = () => {
+      clearTimeout(timeout);
+      const extId   = sessionStorage.getItem('beam_offline_peer_id') || uuid();
+      const extName = IS_ELECTRON
+        ? (myPeerName || 'MacBook')
+        : (navigator.platform || 'Mac');
+      extWs.send(JSON.stringify({ type: 'register', id: extId, name: extName, deviceType: 'laptop' }));
+
+      extWs.onmessage = event => {
+        let msg;
+        try { msg = JSON.parse(event.data); } catch { return; }
+
+        if (msg.type === 'peers') {
+          // Update device list with Android's peers
+          const extPeers = (msg.list || [])
+            .filter(p => p.id !== extId)
+            .map(p => ({ ...p, _extWs: extWs }));
+          extPeers.forEach(p => {
+            const idx = peers.findIndex(x => x.id === p.id);
+            if (idx >= 0) peers[idx] = { ...peers[idx], ...p };
+            else peers.push(p);
+          });
+          const devStep = document.getElementById('offline-step-devices');
+          if (devStep && devStep.style.display !== 'none') renderDeviceList(peers);
+          else if (peers.length > 0) { renderDeviceList(peers); showOfflineStep('devices'); }
+        }
+
+        if (msg.type === 'transfer-request') {
+          // Android wants to send us a file — show Accept/Decline popup on Mac
+          const files = msg.files || [];
+          const f = files[0];
+          window._offlineIncomingSender  = { id: msg.from, name: msg.fromName };
+          window._offlineIncomingFile    = f;
+          window._offlineIncomingFiles   = files;
+          window._lanPendingDownloadUrl  = null;
+          window._extWsForAccept         = extWs; // use this WS to send accept back
+
+          const sizeStr = files.reduce((s, x) => s + (x.size || 0), 0);
+          const label   = files.length > 1 ? `${files.length} files` : (f?.name || 'File');
+          const meta    = `${sizeStr < 1048576 ? (sizeStr/1024).toFixed(1)+' KB' : (sizeStr/1048576).toFixed(1)+' MB'} · from ${msg.fromName}`;
+          document.getElementById('lan-incoming-file').textContent = label;
+          document.getElementById('lan-incoming-meta').textContent = meta;
+          document.getElementById('lan-incoming-btns').style.display  = 'flex';
+          document.getElementById('lan-recv-progress').style.display  = 'none';
+          document.getElementById('lan-incoming-overlay').classList.add('show');
+
+          if (typeof showPopup === 'function') {
+            showPopup('📥', `Incoming: ${label}`, `From ${msg.fromName} — check the overlay`, 'info', 5000);
+          }
+        }
+      };
+
+      extWs.onclose = () => {
+        if (window._externalServers) window._externalServers.delete(url);
+      };
+    };
+
+    extWs.onerror = () => { clearTimeout(timeout); };
+  }
+
+  // Override lanAcceptTransfer to use the correct WS (extWs or lanWs)
+  const _origLanAccept = window.lanAcceptTransfer;
+  window.lanAcceptTransfer = function() {
+    const sender   = window._offlineIncomingSender;
+    const extWs    = window._extWsForAccept;
+    if (sender?.id && extWs && extWs.readyState === WebSocket.OPEN) {
+      document.getElementById('lan-incoming-btns').style.display = 'none';
+      document.getElementById('lan-recv-progress').style.display = 'block';
+      extWs.send(JSON.stringify({ type: 'transfer-accept', to: sender.id }));
+      window._extWsForAccept = null;
+    } else if (_origLanAccept) {
+      _origLanAccept();
+    }
+  };
 
   // ── Mode selection ────────────────────────────────────────────────────────
 
