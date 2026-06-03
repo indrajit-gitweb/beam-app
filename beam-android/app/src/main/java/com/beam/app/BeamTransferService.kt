@@ -24,14 +24,25 @@ class BeamTransferService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var wakeLock: PowerManager.WakeLock? = null
 
+    @Volatile private var cancelRequested = false
+    private var currentCall: okhttp3.Call? = null
+    private var currentSessionId: String? = null
+    private var currentReceiverIp: String? = null
+
     private val http = OkHttpClient.Builder()
         .readTimeout(10, TimeUnit.MINUTES)
         .writeTimeout(10, TimeUnit.MINUTES)
         .connectTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: return START_NOT_STICKY
+        cancelRequested = false   // reset per invocation
 
         val label = when (action) {
             ACTION_LOCAL_SEND_UPLOAD -> "Beam — Sending…"
@@ -62,6 +73,7 @@ class BeamTransferService : Service() {
         val receiverIp  = intent.getStringExtra("receiverIp")  ?: return
         val uriStrings  = intent.getStringArrayListExtra("uriStrings")?.toTypedArray() ?: return
         val fromName    = intent.getStringExtra("fromName")    ?: android.os.Build.MODEL
+        currentReceiverIp = receiverIp
 
         scope.launch {
             try {
@@ -117,6 +129,7 @@ class BeamTransferService : Service() {
                     broadcastFailure("No session ID from receiver")
                     return@launch
                 }
+                currentSessionId = sessionId
 
                 Log.d(TAG, "Session $sessionId — waiting for acceptance…")
                 BeamNotificationHelper.updateProgress(this@BeamTransferService, "Waiting for acceptance…", 0)
@@ -124,6 +137,7 @@ class BeamTransferService : Service() {
                 // ── 3. Poll /status until accepted or declined (max 90 s) ──────
                 var accepted = false
                 for (tick in 0..180) {
+                    if (cancelRequested) { broadcastCancelled(); return@launch }
                     val statusResp = try {
                         http.newCall(
                             Request.Builder()
@@ -190,7 +204,9 @@ class BeamTransferService : Service() {
                         }
                     }
 
-                    val uploadResp = http.newCall(
+                    if (cancelRequested) { broadcastCancelled(); return@launch }
+
+                    val uploadCall = http.newCall(
                         Request.Builder()
                             .url("http://$receiverIp:${BeamLanServer.PORT}/upload")
                             .addHeader("X-Filename",    URLEncoder.encode(file.name, "UTF-8"))
@@ -202,9 +218,16 @@ class BeamTransferService : Service() {
                             .addHeader("X-Total-Files", files.size.toString())
                             .post(reqBody)
                             .build()
-                    ).execute()
+                    )
+                    currentCall = uploadCall
+                    val uploadResp = uploadCall.execute()
+                    currentCall = null
+
+                    if (cancelRequested) { broadcastCancelled(); return@launch }
 
                     if (!uploadResp.isSuccessful) {
+                        val body = uploadResp.body?.string() ?: ""
+                        if (body == "cancelled") { broadcastCancelled(); return@launch }
                         broadcastFailure("Upload failed for ${file.name}: ${uploadResp.code}")
                         return@launch
                     }
@@ -221,9 +244,14 @@ class BeamTransferService : Service() {
 
             } catch (e: Exception) {
                 Log.e(TAG, "Local send failed", e)
-                broadcastFailure(e.message ?: "Upload error")
-                BeamNotificationHelper.showError(this@BeamTransferService, "Send failed", e.message ?: "")
+                if (cancelRequested || e.message?.contains("cancel", ignoreCase = true) == true) {
+                    broadcastCancelled()
+                } else {
+                    broadcastFailure(e.message ?: "Upload error")
+                    BeamNotificationHelper.showError(this@BeamTransferService, "Send failed", e.message ?: "")
+                }
             } finally {
+                currentCall = null
                 releaseWakeLock()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -304,19 +332,36 @@ class BeamTransferService : Service() {
     private fun broadcastFailure(error: String) =
         sendBroadcast(Intent(ACTION_TRANSFER_FAILED).apply { putExtra("error", error) })
 
+    private fun broadcastCancelled() =
+        sendBroadcast(Intent(ACTION_TRANSFER_CANCELLED))
+
     private fun releaseWakeLock() { wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null }
 
     override fun onBind(intent: Intent?): IBinder? = null
-    override fun onDestroy() { super.onDestroy(); scope.cancel(); releaseWakeLock() }
+    override fun onDestroy() {
+        super.onDestroy()
+        scope.cancel()
+        releaseWakeLock()
+        if (instance === this) instance = null
+    }
 
     companion object {
         const val TAG                      = "BeamTransferService"
+        @Volatile private var instance: BeamTransferService? = null
+
+        /** Cancel the currently running transfer from any thread */
+        fun cancelCurrent() {
+            val svc = instance ?: return
+            svc.cancelRequested = true
+            svc.currentCall?.cancel()
+        }
         const val NOTIFICATION_ID          = 1001
-        const val ACTION_LOCAL_SEND_UPLOAD = "com.beam.app.LOCAL_SEND_UPLOAD"
-        const val ACTION_START_DOWNLOAD    = "com.beam.app.START_DOWNLOAD"
-        const val ACTION_TRANSFER_COMPLETE = "com.beam.app.TRANSFER_COMPLETE"
-        const val ACTION_TRANSFER_PROGRESS = "com.beam.app.TRANSFER_PROGRESS"
-        const val ACTION_TRANSFER_FAILED   = "com.beam.app.TRANSFER_FAILED"
+        const val ACTION_LOCAL_SEND_UPLOAD  = "com.beam.app.LOCAL_SEND_UPLOAD"
+        const val ACTION_START_DOWNLOAD     = "com.beam.app.START_DOWNLOAD"
+        const val ACTION_TRANSFER_COMPLETE  = "com.beam.app.TRANSFER_COMPLETE"
+        const val ACTION_TRANSFER_PROGRESS  = "com.beam.app.TRANSFER_PROGRESS"
+        const val ACTION_TRANSFER_FAILED    = "com.beam.app.TRANSFER_FAILED"
+        const val ACTION_TRANSFER_CANCELLED = "com.beam.app.TRANSFER_CANCELLED"
 
         fun startUpload(context: Context, receiverIp: String, uris: List<Uri>, fromName: String) {
             val intent = Intent(context, BeamTransferService::class.java).apply {

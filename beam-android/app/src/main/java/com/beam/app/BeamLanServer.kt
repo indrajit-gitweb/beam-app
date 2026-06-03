@@ -86,11 +86,13 @@ class BeamLanServer(
         if (uri.startsWith("/status/") && method == Method.GET)
             return cors(handleGetStatus(uri.removePrefix("/status/").split("?")[0]))
 
-        // Accept or decline (called by WebView JS or directly via HTTP from UI)
+        // Accept, decline or cancel
         if (uri.startsWith("/accept/") && (method == Method.POST || method == Method.GET))
             return cors(handleAccept(uri.removePrefix("/accept/").split("?")[0]))
         if (uri.startsWith("/decline/") && (method == Method.POST || method == Method.GET))
             return cors(handleDecline(uri.removePrefix("/decline/").split("?")[0]))
+        if (uri.startsWith("/cancel/") && (method == Method.POST || method == Method.GET))
+            return cors(handleCancel(uri.removePrefix("/cancel/").split("?")[0]))
 
         // Browser polls for pending incoming requests
         if (uri == "/pending" && method == Method.GET)
@@ -178,6 +180,11 @@ class BeamLanServer(
         return newFixedLengthResponse(Response.Status.OK, "application/json", """{"ok":true}""")
     }
 
+    private fun handleCancel(sessionId: String): Response {
+        cancelSession(sessionId)
+        return newFixedLengthResponse(Response.Status.OK, "application/json", """{"ok":true}""")
+    }
+
     // ── /pending ───────────────────────────────────────────────────────────────
 
     private fun handlePending(): Response {
@@ -208,6 +215,7 @@ class BeamLanServer(
         val h          = session.headers
         val filename   = decode(h["x-filename"]  ?: "beam-file")
         val fromName   = decode(h["x-from-name"] ?: "sender")
+        val sessionId  = h["x-session-id"]       ?: ""
         val contentLen = h["content-length"]?.toLongOrNull() ?: -1L
         val fileIndex  = h["x-file-index"]?.toIntOrNull()  ?: 0
         val totalFiles = h["x-total-files"]?.toIntOrNull() ?: 1
@@ -236,16 +244,24 @@ class BeamLanServer(
 
             try {
                 if (contentLen > 0) {
-                    // Exact read — avoids blocking at end of stream
+                    // Look up session to support mid-transfer cancel
+                    val xferSession = sessions[sessionId]
                     var remaining = contentLen
                     while (remaining > 0) {
+                        // Check for mid-transfer cancel (receiver tapped Cancel)
+                        if (xferSession != null && xferSession.status != "accepted") {
+                            fos.flush(); fos.close()
+                            dest.delete()   // remove partial file
+                            Log.d(TAG, "Upload cancelled mid-stream for $sessionId")
+                            return newFixedLengthResponse(
+                                Response.Status.INTERNAL_ERROR, "text/plain", "cancelled")
+                        }
                         val toRead = minOf(buf.size.toLong(), remaining).toInt()
                         n = session.inputStream.read(buf, 0, toRead)
                         if (n == -1) break
                         fos.write(buf, 0, n)
                         total += n
                         remaining -= n
-                        // Throttle: only broadcast when integer % changes (max 100 broadcasts per file)
                         val pct = (total * 100 / contentLen).toInt()
                         if (pct != lastPct) {
                             lastPct = pct
@@ -298,6 +314,12 @@ class BeamLanServer(
     fun declineSession(sessionId: String) {
         sessions[sessionId]?.status = "declined"
         Log.d(TAG, "Session declined: $sessionId")
+    }
+
+    /** Cancel a session that is currently uploading (receiver tapped Cancel) */
+    fun cancelSession(sessionId: String) {
+        sessions[sessionId]?.status = "cancelled"
+        Log.d(TAG, "Session cancelled: $sessionId")
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

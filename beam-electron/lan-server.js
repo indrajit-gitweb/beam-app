@@ -148,6 +148,23 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
+  // ── Cancel session (mid-transfer) ─────────────────────────────────────────────
+  const cancelMatch = req.url?.match(/^\/cancel\/([^/?]+)/);
+  if (cancelMatch && (req.method === 'POST' || req.method === 'GET')) {
+    const sess = sessions.get(cancelMatch[1]);
+    if (sess) {
+      sess.status = 'cancelled';
+      browsers.forEach(ws => {
+        try { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'transfer-cancelled' })); }
+        catch (_) {}
+      });
+    }
+    console.log(`[beam-lan] Cancelled: ${cancelMatch[1]}`);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   // ── List pending sessions ─────────────────────────────────────────────────────
   if (req.url === '/pending' && req.method === 'GET') {
     cleanOldSessions();
@@ -175,6 +192,7 @@ const httpServer = http.createServer((req, res) => {
     const filename   = safeDecodeHeader(req.headers['x-filename'])   || 'beam-file';
     const filetype   = req.headers['x-filetype']                     || 'application/octet-stream';
     const fromName   = safeDecodeHeader(req.headers['x-from-name'])  || DEVICE_NAME;
+    const sessionId  = req.headers['x-session-id']                   || '';
     const fileIndex  = parseInt(req.headers['x-file-index']  || '0', 10);
     const totalFiles = parseInt(req.headers['x-total-files'] || '1', 10);
 
@@ -197,6 +215,15 @@ const httpServer = http.createServer((req, res) => {
     let lastPct = -1;   // throttle progress to 1% increments
 
     req.on('data', chunk => {
+      // Check mid-transfer cancel
+      const sess = sessionId ? sessions.get(sessionId) : null;
+      if (sess && sess.status === 'cancelled') {
+        writeStream.destroy();
+        try { fs.unlinkSync(destPath); } catch (_) {}
+        req.destroy();
+        if (!res.headersSent) { res.writeHead(499); res.end('cancelled'); }
+        return;
+      }
       total += chunk.length;
       writeStream.write(chunk);
       // Send progress to browser via WebSocket (throttled to 1% increments)

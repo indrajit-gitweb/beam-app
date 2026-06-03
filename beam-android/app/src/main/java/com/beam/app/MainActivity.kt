@@ -130,6 +130,16 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
+                // ── Transfer cancelled ────────────────────────────────────────
+                BeamTransferService.ACTION_TRANSFER_CANCELLED -> {
+                    runOnUiThread {
+                        webView.evaluateJavascript(
+                            "window.onNativeTransferCancelled && " +
+                            "window.onNativeTransferCancelled();", null
+                        )
+                    }
+                }
+
                 // ── LAN server discovered via NSD ─────────────────────────────
                 LanDiscovery.ACTION_SERVER_FOUND -> {
                     val url = intent.getStringExtra("url") ?: return
@@ -262,6 +272,7 @@ class MainActivity : AppCompatActivity() {
             addAction(BeamTransferService.ACTION_TRANSFER_COMPLETE)
             addAction(BeamTransferService.ACTION_TRANSFER_PROGRESS)
             addAction(BeamTransferService.ACTION_TRANSFER_FAILED)
+            addAction(BeamTransferService.ACTION_TRANSFER_CANCELLED)
             addAction(LanDiscovery.ACTION_SERVER_FOUND)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

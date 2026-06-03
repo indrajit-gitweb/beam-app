@@ -731,6 +731,13 @@
     }
     .xfer-dot  { color: var(--muted); opacity: .5; }
     .xfer-sep  { color: var(--muted); }
+    .xfer-cancel-btn {
+      margin-top: 12px; padding: 6px 18px;
+      font-size: .78rem; border-radius: 6px; cursor: pointer;
+      background: transparent; border: 1px solid rgba(239,68,68,.35);
+      color: #f87171; transition: background .15s, border-color .15s;
+    }
+    .xfer-cancel-btn:hover { background: rgba(239,68,68,.1); border-color: #f87171; }
 
     /* Success state */
     .offline-success-wrap { text-align: center; padding: 20px 0 8px; }
@@ -978,6 +985,7 @@
       <span class="xfer-dot">·</span>
       <span id="recv-eta">—</span>
     </div>
+    <button class="lan-incoming-decline xfer-cancel-btn" style="margin-top:10px" onclick="cancelIncomingTransfer()">✕ Cancel</button>
   </div>
   <!-- Retry section — shown when one or more files failed -->
   <div id="lan-retry-section" style="display:none">
@@ -1154,7 +1162,8 @@
               <span class="xfer-dot">·</span>
               <span id="offline-eta">—</span>
             </div>
-            <!-- Fallback status message — shown when switching from WebRTC to HTTP -->
+            <button class="offline-cancel-btn xfer-cancel-btn" onclick="cancelOfflineTransfer()">✕ Cancel</button>
+            <!-- Fallback status message -->
             <div class="transfer-fallback-msg" id="transfer-fallback-msg" style="display:none"></div>
           </div>
         </div>
@@ -3612,6 +3621,11 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }
 
     selectedDev = dev;
+    // Track receiver so cancel can notify it
+    window._currentTransferReceiverIp  = dev.ip;
+    window._currentTransferSessionId   = null;  // set later by service/browser flow
+    window._currentXhr                 = null;
+
     document.getElementById('offline-waiting-device').textContent = dev.name;
     showOfflineStep('waiting');
 
@@ -3667,6 +3681,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       });
       const j = await announceResp.json();
       sessionId = j.sessionId;
+      window._currentTransferSessionId = sessionId;  // expose for cancel
     } catch(e) {
       showOfflineStep('fail');
       document.getElementById('offline-fail-detail').textContent =
@@ -3749,8 +3764,10 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         if (e.lengthComputable)
           onProgress(Math.round(e.loaded * 100 / e.total), e.loaded, e.total);
       };
-      xhr.onload  = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error('HTTP ' + xhr.status)); };
-      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.onload  = () => { window._currentXhr = null; if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error('HTTP ' + xhr.status)); };
+      xhr.onerror = () => { window._currentXhr = null; reject(new Error('Network error')); };
+      xhr.onabort = () => { window._currentXhr = null; reject(new Error('cancelled')); };
+      window._currentXhr = xhr;
       xhr.send(file);
     });
   }
@@ -4022,6 +4039,75 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       showPopup('❌', 'Transfer Failed', error, 'error', 5000);
   };
 
+  // ── Shared reset helper ────────────────────────────────────────────────────
+  function _resetProgressUI() {
+    if (transferTimer) { clearTimeout(transferTimer); transferTimer = null; }
+    _speedWindow = []; _xferLastBytes = 0;
+    ['offline-detail-row','recv-detail-row'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.style.display = 'none';
+    });
+  }
+
+  // ── Sender cancel ──────────────────────────────────────────────────────────
+  window.cancelOfflineTransfer = function() {
+    const receiverIp = window._currentTransferReceiverIp;
+    const sessionId  = window._currentTransferSessionId;
+
+    if (isAndroid() && window.BeamNative) {
+      // Native service handles the cancel + notifies receiver
+      window.BeamNative.cancelTransfer();
+    } else {
+      // Browser: abort the in-flight XHR
+      if (window._currentXhr) {
+        window._currentXhr.abort();
+        window._currentXhr = null;
+      }
+      // Also tell the receiver's server to cancel
+      if (receiverIp && sessionId) {
+        fetch('http://' + receiverIp + ':' + LAN_PORT + '/cancel/' + sessionId)
+          .catch(() => {});
+      }
+    }
+
+    _resetProgressUI();
+    document.getElementById('offline-fail-detail').textContent = 'Transfer cancelled.';
+    showOfflineStep('fail');
+    window._currentTransferSessionId  = null;
+    window._currentTransferReceiverIp = null;
+  };
+
+  // ── Receiver cancel (mid-transfer) ─────────────────────────────────────────
+  window.cancelIncomingTransfer = function() {
+    const sessionId = window._offlinePendingSessionId;
+
+    if (isAndroid() && window.BeamNative) {
+      // declineIncoming marks the session cancelled — handleUpload stops streaming
+      window.BeamNative.declineIncoming(sessionId || '');
+    } else {
+      const baseUrl = IS_ELECTRON
+        ? 'http://localhost:' + LAN_PORT
+        : (window.location.hostname ? 'http://' + window.location.hostname + ':' + LAN_PORT : null);
+      if (baseUrl && sessionId) fetch(baseUrl + '/cancel/' + sessionId).catch(() => {});
+    }
+
+    _resetProgressUI();
+    document.getElementById('lan-incoming-overlay')?.classList.remove('show');
+    window._offlinePendingSessionId = null;
+    if (typeof showPopup === 'function')
+      showPopup('⊘', 'Transfer cancelled', 'Incoming transfer was cancelled.', 'warn', 3000);
+  };
+
+  // ── Native callback: transfer cancelled by either side ─────────────────────
+  window.onNativeTransferCancelled = function() {
+    _resetProgressUI();
+    document.getElementById('lan-incoming-overlay')?.classList.remove('show');
+    const offStep = document.getElementById('offline-step-transfer');
+    if (offStep && offStep.style.display !== 'none') {
+      document.getElementById('offline-fail-detail').textContent = 'Transfer cancelled.';
+      showOfflineStep('fail');
+    }
+  };
+
   // ── Mac LAN server WebSocket (for incoming notifications) ─────────────────
   // Connects to own LAN server WebSocket to receive transfer-complete/incoming notifications
   function connectMacNotificationWs() {
@@ -4041,6 +4127,8 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
           window.onNativeTransferComplete(msg.filename, msg.savedPath || '', msg.fromName || '');
         } else if (msg.type === 'device-found') {
           addDevice({ ip: msg.ip, name: msg.name, platform: msg.platform || 'unknown', port: msg.port || LAN_PORT });
+        } else if (msg.type === 'transfer-cancelled') {
+          window.onNativeTransferCancelled();
         } else if (msg.type === 'transfer-progress' || msg.type === 'progress') {
           window.onNativeTransferProgress(
             msg.pct, msg.filename || '',
