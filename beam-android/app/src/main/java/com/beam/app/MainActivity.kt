@@ -242,7 +242,14 @@ class MainActivity : AppCompatActivity() {
                 fileChooserCallback?.onReceiveValue(emptyArray())
                 fileChooserCallback = filePathCallback
                 return try {
-                    filePickerLauncher.launch(fileChooserParams.createIntent())
+                    // Explicitly enable multi-select — createIntent() alone does
+                    // not set EXTRA_ALLOW_MULTIPLE even when the HTML <input>
+                    // has the `multiple` attribute, so without this flag the
+                    // system picker opens in single-file mode.
+                    val intent = fileChooserParams.createIntent().apply {
+                        putExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, true)
+                    }
+                    filePickerLauncher.launch(intent)
                     true
                 } catch (e: Exception) {
                     fileChooserCallback = null; false
