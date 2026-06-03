@@ -3458,7 +3458,9 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 
       ws.onopen = async () => {
         clearTimeout(timeout);
-        myPeerId   = uuid();
+        // Use stable ID so reconnects don't create duplicate device entries
+        myPeerId = sessionStorage.getItem('beam_offline_peer_id') || uuid();
+        sessionStorage.setItem('beam_offline_peer_id', myPeerId);
         myPeerName = IS_ELECTRON
           ? (await window.electronAPI.getDeviceName())
           : IS_ANDROID_NATIVE && window.BeamNative?.getDeviceName
@@ -4949,10 +4951,15 @@ window.dismissRetrySection = function() {
   if (window.electronAPI) return;
 
   const LAN_PORT   = 7777;
-  const myId       = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-    const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-  });
-  const myName     = (window.BeamNative?.getDeviceName?.() || navigator.platform || 'Mobile Device');
+  // Use a STABLE peer ID stored in sessionStorage so reconnects don't create duplicates
+  let myId = sessionStorage.getItem('beam_peer_id');
+  if (!myId) {
+    myId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+    sessionStorage.setItem('beam_peer_id', myId);
+  }
+  const myName     = (window.BeamNative?.getDeviceName?.() || navigator.platform || 'Browser');
   const deviceType = navigator.maxTouchPoints > 0 ? 'phone' : 'laptop';
 
   // ── Resolve the WebSocket URL ──────────────────────────────────────────────
