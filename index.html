@@ -2273,8 +2273,12 @@ function resetSenderToIdle() {
   fileQueueSec.style.display    = 'none';
   modeSelector.style.display    = 'none';
   expiryPicker.style.display    = 'none';
-  cloudUploadProg.innerHTML     = '';
+  cloudUploadProg.innerHTML      = '';
   cloudLinkDisplay.style.display = 'none';
+  // Restore upload button — it gets hidden in showCloudLink() and was never reset
+  cloudUploadBtn.style.display   = '';
+  cloudUploadBtn.disabled        = false;
+  cloudUploadBtn.innerHTML       = '<svg class="icon" width="14" height="14"><use href="#ico-cloud"/></svg> Upload &amp; Generate Link';
   megaErrorBox.style.display    = 'none';
   codeDisplay.style.display     = 'none';
   keepOpenNote.style.display    = 'none';
