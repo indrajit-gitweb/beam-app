@@ -3524,9 +3524,14 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 
   async function getLanServerUrl() {
     // ── Electron: LAN server always on localhost ──
+    // Retry up to 5 times with 1s delay — server may still be starting
     if (IS_ELECTRON) {
-      const info = await window.electronAPI.getLanInfo();
-      return info ? `ws://localhost:${info.port}` : null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const info = await window.electronAPI.getLanInfo();
+        if (info) return `ws://localhost:${info.port}`;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+      return null;
     }
 
     // ── Android native app: use URL from NSD/mDNS discovery ──
@@ -4431,6 +4436,13 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         }
       } else {
         // No LAN server found
+        if (IS_ELECTRON) {
+          // Electron: LAN server should always be running — retry automatically
+          document.getElementById('offline-detect-title').textContent = 'Starting LAN server…';
+          document.getElementById('offline-detect-sub').textContent   = 'Please wait a moment';
+          setTimeout(() => autoDetectConnection(), 3000); // retry in 3s
+          return;
+        }
         if (IS_ANDROID_NATIVE) {
           // On Android: never show demo mode — show the not-found screen instead
           document.getElementById('offline-detect-ring').style.display = 'none';
