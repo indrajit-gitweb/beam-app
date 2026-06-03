@@ -200,6 +200,108 @@ class MainActivity : AppCompatActivity() {
         startLanDiscovery()
         setupWebView()
         registerReceivers()
+
+        // Handle files shared INTO Beam from another app (share sheet)
+        handleShareIntent(intent)
+    }
+
+    // Called when Beam is already running and a new share intent arrives
+    // (android:launchMode="singleTask" routes it here instead of onCreate)
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleShareIntent(intent)
+    }
+
+    /**
+     * Handles ACTION_SEND / ACTION_SEND_MULTIPLE intents that arrive when the
+     * user picks Beam from the system share sheet.
+     * Extracts the shared file URI(s), stores them in BeamWebInterface, and
+     * once the WebView is ready injects them into the file queue.
+     */
+    @Suppress("DEPRECATION")
+    private fun handleShareIntent(intent: Intent?) {
+        if (intent == null) return
+
+        val uris = mutableListOf<Uri>()
+
+        when (intent.action) {
+            Intent.ACTION_SEND -> {
+                val uri: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                else
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                if (uri != null) uris.add(uri)
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val list: ArrayList<Uri>? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                else
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+                if (!list.isNullOrEmpty()) uris.addAll(list)
+            }
+            else -> return  // not a share intent
+        }
+
+        if (uris.isEmpty()) return
+
+        Log.d("MainActivity", "Share intent received: ${uris.size} file(s)")
+        beamWebInterface.storeSelectedUris(uris.toTypedArray())
+
+        // Build JSON metadata for each file so JavaScript can render the queue
+        val filesJson = buildFilesJson(uris.toTypedArray())
+
+        // The WebView may not be ready yet — retry until onPageFinished fires
+        pendingShareJson = filesJson
+        injectShareFilesIfReady()
+    }
+
+    private var pendingShareJson: String? = null
+    private var webViewReady = false
+
+    private fun injectShareFilesIfReady() {
+        val json = pendingShareJson ?: return
+        if (!webViewReady) return   // will be called again from onPageFinished
+        pendingShareJson = null
+        runOnUiThread {
+            webView.evaluateJavascript(
+                "window.__beamShareFiles && window.__beamShareFiles($json);", null
+            )
+        }
+    }
+
+    /** Read display-name + size + MIME type for each URI via ContentResolver. */
+    private fun buildFilesJson(uris: Array<Uri>): String {
+        val arr = org.json.JSONArray()
+        uris.forEach { uri ->
+            try {
+                var name = "file"
+                var size = 0L
+                contentResolver.query(
+                    uri,
+                    arrayOf(
+                        android.provider.OpenableColumns.DISPLAY_NAME,
+                        android.provider.OpenableColumns.SIZE
+                    ), null, null, null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val ni = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        val si = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (ni >= 0) name = cursor.getString(ni) ?: "file"
+                        if (si >= 0) size = cursor.getLong(si)
+                    }
+                }
+                val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+                arr.put(org.json.JSONObject().apply {
+                    put("name", name)
+                    put("size", size)
+                    put("type", mime)
+                })
+            } catch (e: Exception) {
+                Log.e("MainActivity", "buildFilesJson error for $uri: ${e.message}")
+            }
+        }
+        return arr.toString()
     }
 
     private fun requestNotificationPermission() {
@@ -232,6 +334,8 @@ class MainActivity : AppCompatActivity() {
                 loadingView.visibility = View.GONE
                 webView.visibility     = View.VISIBLE
                 webView.evaluateJavascript("window.__BEAM_NATIVE_ANDROID__ = true;", null)
+                webViewReady = true
+                injectShareFilesIfReady()   // deliver any pending share intent
             }
 
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {

@@ -2905,6 +2905,41 @@ dropZone.addEventListener('drop', e => {
 });
 dropZone.addEventListener('click', () => fileInput.click());
 dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+
+// ── Android Share Target handler ───────────────────────────────────────────
+// Called by MainActivity when Beam is opened via the system share sheet.
+// filesJson: [{name, size, type}, ...] — metadata only (content read natively).
+// We create synthetic File objects so they appear in the queue correctly;
+// the actual bytes are read from stored URIs by BeamTransferService when sending.
+window.__beamShareFiles = function(filesJson) {
+  try {
+    const meta = typeof filesJson === 'string' ? JSON.parse(filesJson) : filesJson;
+    if (!meta || !meta.length) return;
+
+    // Build synthetic File objects that carry the correct name/size/type for
+    // display in the queue. For offline mode, BeamTransferService reads the
+    // real bytes from the stored URI. For P2P/Cloud on Android, the user
+    // can also re-pick via the file input if content is needed.
+    const files = meta.map(m => {
+      const f = new File([], m.name, { type: m.type || 'application/octet-stream' });
+      // Patch size since File([], ...) has size=0
+      Object.defineProperty(f, 'size', { value: m.size || 0 });
+      f._fromShareIntent = true;
+      return f;
+    });
+
+    // Switch to P2P mode (best default for local sharing) and add to queue
+    if (typeof selectMode === 'function') selectMode('p2p');
+    addFilesToQueue(files);
+
+    if (typeof showPopup === 'function')
+      showPopup('📤', 'Files ready to send',
+        `${files.length} file${files.length > 1 ? 's' : ''} loaded from share. Choose a transfer mode and send.`,
+        'success', 4000);
+  } catch(e) {
+    console.error('[Beam] __beamShareFiles error:', e);
+  }
+};
 fileInput.addEventListener('change', e => {
   const files = Array.from(e.target.files);
   if (files.length) { addFilesToQueue(files); fileInput.value = ''; }
