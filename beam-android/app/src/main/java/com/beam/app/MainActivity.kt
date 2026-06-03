@@ -9,7 +9,9 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.util.Log
+import android.view.WindowManager
 import android.view.View
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -29,6 +31,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var lanDiscovery: LanDiscovery
     private lateinit var beamWebInterface: BeamWebInterface
     private var beamLanServer: BeamLanServer? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     // ── File chooser callback — set when WebView requests a file picker ──────
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
@@ -194,6 +197,15 @@ class MainActivity : AppCompatActivity() {
             lanDiscovery.registerService(BeamLanServer.PORT, name)
             beamLanServer = server
             Log.d("MainActivity", "LAN server started: ${server.getServerUrl()}")
+
+            // Acquire WakeLock to prevent Realme/OPPO power manager from freezing
+            // the app and killing WebSocket connections when screen turns off
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "Beam::LanServerWakeLock"
+            ).apply { acquire(60 * 60 * 1000L) } // up to 1 hour
+            Log.d("MainActivity", "WakeLock acquired — CPU stays awake for LAN server")
             // Inject server URL into WebView once page loads
             webView.evaluateJavascript(
                 "window.__BEAM_LOCAL_SERVER_URL__ = '${server.getServerUrl()}';", null
@@ -224,6 +236,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        wakeLock?.let { if (it.isHeld) it.release() }
         beamLanServer?.stop()
         beamLanServer = null
         super.onDestroy()

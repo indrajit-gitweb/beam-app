@@ -208,8 +208,11 @@ class BeamLanServer(
                 }
                 "ping" -> { /* keepalive from client — no response needed */ }
                 "signal", "transfer-request", "transfer-accept", "transfer-decline" -> {
-                    val to     = json.optString("to")
-                    val target = peers[to] ?: return
+                    val msgType = json.optString("type")
+                    val to      = json.optString("to")
+                    val target  = peers[to]
+                    Log.d(TAG, "Routing $msgType from $peerId to $to — target=${if(target!=null) "found" else "NOT FOUND"} peers=${peers.keys}")
+                    if (target == null) return
                     json.put("from",     peerId ?: "")
                     json.put("fromName", peerMeta[peerId]?.name ?: "")
                     target.send(json.toString())
@@ -218,10 +221,12 @@ class BeamLanServer(
         }
 
         override fun onClose(code: CloseCode?, reason: String?, initiatedByRemote: Boolean) {
+            Log.d(TAG, "Peer disconnected: $peerId code=$code reason=$reason remote=$initiatedByRemote")
             peerId?.let { id -> peers.remove(id); peerMeta.remove(id); broadcastPeerList() }
         }
 
         override fun onException(e: IOException) {
+            Log.e(TAG, "WS exception for $peerId: ${e.message}")
             peerId?.let { id -> peers.remove(id); peerMeta.remove(id) }
         }
 
