@@ -3523,15 +3523,10 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // ── LAN Server connection ──────────────────────────────────────────────────
 
   async function getLanServerUrl() {
-    // ── Electron: LAN server always on localhost ──
-    // Retry up to 5 times with 1s delay — server may still be starting
+    // ── Electron: LAN server always on localhost:7777 ──
+    // Connect directly — port is fixed, no need to wait for getLanInfo()
     if (IS_ELECTRON) {
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const info = await window.electronAPI.getLanInfo();
-        if (info) return `ws://localhost:${info.port}`;
-        await new Promise(r => setTimeout(r, 1000));
-      }
-      return null;
+      return `ws://localhost:${LAN_PORT}`;
     }
 
     // ── Android native app: use URL from NSD/mDNS discovery ──
@@ -4405,42 +4400,73 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         document.getElementById('offline-chosen-fallback').textContent =
           'Bluetooth fallback coming in Phase 3.';
 
-        // Show Android QR code when running in Electron
+        // Show QR code when running in Electron
+        // Try getLanInfo() first; if null, fall back to health endpoint to get IP
         if (IS_ELECTRON) {
-          window.electronAPI.getLanInfo().then(info => {
-            if (!info) return;
-            const url     = `http://${info.ip}:${info.port}`;
-            const box     = document.getElementById('offline-android-box');
-            const urlEl   = document.getElementById('offline-android-url');
-            const qrWrap  = document.getElementById('offline-qr-wrap');
-            urlEl.textContent  = url;
-            qrWrap.innerHTML   = '';
-            box.style.display  = 'block';
-            // Generate QR code once the library has loaded
-            function makeQR() {
+          const showQR = (ip, port) => {
+            const url    = `http://${ip}:${port}`;
+            const box    = document.getElementById('offline-android-box');
+            const urlEl  = document.getElementById('offline-android-url');
+            const qrWrap = document.getElementById('offline-qr-wrap');
+            if (!box || !urlEl || !qrWrap) return;
+            urlEl.textContent = url;
+            qrWrap.innerHTML  = '';
+            box.style.display = 'block';
+            const tryQR = () => {
               if (typeof QRCode !== 'undefined') {
-                new QRCode(qrWrap, {
-                  text:         url,
-                  width:        68,
-                  height:       68,
-                  colorDark:    '#000000',
-                  colorLight:   '#ffffff',
-                  correctLevel: QRCode.CorrectLevel.M,
-                });
-              } else {
-                setTimeout(makeQR, 200); // wait for CDN script to load
-              }
+                new QRCode(qrWrap, { text: url, width: 68, height: 68,
+                  colorDark: '#000000', colorLight: '#ffffff',
+                  correctLevel: QRCode.CorrectLevel.M });
+              } else { setTimeout(tryQR, 200); }
+            };
+            tryQR();
+          };
+
+          // Try IPC first, fall back to HTTP health endpoint
+          window.electronAPI.getLanInfo().then(info => {
+            if (info && info.ip) {
+              showQR(info.ip, info.port);
+            } else {
+              // getLanInfo returned null — fetch IP from the running server directly
+              fetch(`http://localhost:${LAN_PORT}/health`)
+                .then(r => r.json())
+                .then(h => {
+                  // Health response has {ok, name, port} — get local IP from WebSocket
+                  const ip = new WebSocket(`ws://localhost:${LAN_PORT}`)
+                    && window.location.hostname || '127.0.0.1';
+                  // Use a dedicated endpoint or just show localhost as fallback
+                  fetch(`http://localhost:${LAN_PORT}/peers`)
+                    .then(() => {
+                      // Server is running — get IP via a small trick: connect and read
+                      const pc = new RTCPeerConnection({iceServers: [{urls: 'stun:stun.l.google.com:19302'}]});
+                      pc.createDataChannel('');
+                      pc.createOffer().then(o => pc.setLocalDescription(o));
+                      pc.onicecandidate = e => {
+                        if (!e || !e.candidate) return;
+                        const m = e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
+                        if (m && m[1] !== '0.0.0.0' && !m[1].startsWith('127.')) {
+                          showQR(m[1], LAN_PORT);
+                          pc.close();
+                        }
+                      };
+                      setTimeout(() => pc.close(), 3000);
+                    });
+                })
+                .catch(() => {});
             }
-            makeQR();
           });
         }
       } else {
         // No LAN server found
         if (IS_ELECTRON) {
-          // Electron: LAN server should always be running — retry automatically
-          document.getElementById('offline-detect-title').textContent = 'Starting LAN server…';
-          document.getElementById('offline-detect-sub').textContent   = 'Please wait a moment';
-          setTimeout(() => autoDetectConnection(), 3000); // retry in 3s
+          // LAN server unreachable — show error with Retry button
+          document.getElementById('offline-detect-ring').style.display = 'none';
+          document.getElementById('offline-detect-title').textContent  = 'LAN server not reachable';
+          document.getElementById('offline-detect-sub').innerHTML =
+            'The local server could not be reached.<br>' +
+            '<button onclick="autoDetectConnection()" style="margin-top:12px;padding:8px 20px;' +
+            'border-radius:8px;border:1px solid rgba(16,185,129,.4);background:rgba(16,185,129,.1);' +
+            'color:#34d399;font-weight:700;cursor:pointer;font-size:.82rem;">🔄 Retry</button>';
           return;
         }
         if (IS_ANDROID_NATIVE) {
