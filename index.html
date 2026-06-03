@@ -5542,38 +5542,46 @@ window.dismissRetrySection = function() {
 <script>
 (function() {
   function isAppEnv() {
-    // Re-check every time — BeamNative may not be injected yet on first run
     return !!(window.electronAPI || window.BeamNative || window.__BEAM_NATIVE_ANDROID__);
   }
 
-  function apply() {
-    // Exit if running inside any app — check on every call in case injection happened
-    if (isAppEnv()) return;
-
+  function restrict() {
     var card = document.getElementById('mode-offline');
-    if (card) {
-      card.classList.add('unavailable');
-      card.setAttribute('aria-disabled', 'true');
-    }
+    if (card) { card.classList.add('unavailable'); card.setAttribute('aria-disabled', 'true'); }
     var tag  = document.getElementById('offline-app-tag');
     if (tag)  tag.style.display = 'inline-flex';
     var warn = document.getElementById('hiw-offline-browser-warning');
     if (warn) warn.style.display = 'block';
   }
 
-  // Apply now + watch mode-selector visibility
-  apply();
-  var ms = document.getElementById('mode-selector');
-  if (ms) new MutationObserver(apply).observe(ms, { attributes: true, attributeFilter: ['style'] });
+  function unrestrict() {
+    // Remove restriction if it was applied before BeamNative was ready
+    var card = document.getElementById('mode-offline');
+    if (card) { card.classList.remove('unavailable'); card.removeAttribute('aria-disabled'); }
+    var tag  = document.getElementById('offline-app-tag');
+    if (tag)  tag.style.display = 'none';
+    var warn = document.getElementById('hiw-offline-browser-warning');
+    if (warn) warn.style.display = 'none';
+  }
 
-  // Retry every 500ms for 10s — on Android, BeamNative may arrive slightly
-  // after page parse, so re-check isAppEnv() on each retry
+  // Watch mode-selector so restriction re-applies when files are queued
+  var ms = document.getElementById('mode-selector');
+  if (ms) new MutationObserver(function() { if (!isAppEnv()) restrict(); })
+            .observe(ms, { attributes: true, attributeFilter: ['style'] });
+
+  // Retry every 300ms for 5s
+  // If app env detected at any point — remove restriction and stop
+  // If never detected — apply restriction
   var n = 0;
   var iv = setInterval(function() {
-    if (isAppEnv()) { clearInterval(iv); return; } // app detected — stop immediately
-    apply();
-    if (++n >= 20) clearInterval(iv);
-  }, 500);
+    if (isAppEnv()) {
+      unrestrict();      // ← KEY FIX: remove any restriction already applied
+      clearInterval(iv);
+      return;
+    }
+    restrict();
+    if (++n >= 17) clearInterval(iv); // ~5s
+  }, 300);
 })();
 </script>
 </body>
