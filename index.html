@@ -3523,10 +3523,10 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // ── LAN Server connection ──────────────────────────────────────────────────
 
   async function getLanServerUrl() {
-    // ── Electron: LAN server always on localhost:7777 ──
-    // Connect directly — port is fixed, no need to wait for getLanInfo()
+    // ── Electron: LAN server always on localhost ──
     if (IS_ELECTRON) {
-      return `ws://localhost:${LAN_PORT}`;
+      const info = await window.electronAPI.getLanInfo();
+      return info ? `ws://localhost:${info.port}` : null;
     }
 
     // ── Android native app: use URL from NSD/mDNS discovery ──
@@ -4334,52 +4334,11 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     document.getElementById('offline-chosen-result').style.display = 'none';
     document.getElementById('offline-android-box').style.display   = 'none';
     document.getElementById('offline-detect-ring').style.display   = '';
-    document.getElementById('offline-detect-title').textContent    = 'Connecting…';
+    document.getElementById('offline-detect-title').textContent    = 'Detecting best connection…';
     document.getElementById('offline-detect-sub').textContent      =
-      IS_ANDROID_NATIVE ? 'Searching for Beam on your WiFi…' : 'Connecting to local server…';
-
-    // ── Show QR code immediately on Electron — don't wait for connection ──
-    if (IS_ELECTRON) {
-      fetch(`http://localhost:${LAN_PORT}/health`)
-        .then(r => r.json())
-        .then(h => {
-          // Use WebRTC ICE to discover local IP
-          try {
-            const pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
-            pc.createDataChannel('');
-            pc.createOffer().then(o => pc.setLocalDescription(o));
-            pc.onicecandidate = e => {
-              if (!e?.candidate) return;
-              const m = e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
-              if (m && m[1] !== '0.0.0.0' && !m[1].startsWith('127.')) {
-                _showElectronQR(`http://${m[1]}:${LAN_PORT}`);
-                pc.close();
-              }
-            };
-            setTimeout(() => pc.close(), 3000);
-          } catch(_) {}
-          // Also try from getLanInfo IPC
-          window.electronAPI?.getLanInfo?.().then(info => {
-            if (info?.ip) _showElectronQR(`http://${info.ip}:${info.port}`);
-          });
-        })
-        .catch(() => {});
-    }
-
-    function _showElectronQR(url) {
-      const box = document.getElementById('offline-android-box');
-      const urlEl = document.getElementById('offline-android-url');
-      const qrWrap = document.getElementById('offline-qr-wrap');
-      if (!box || !urlEl || !qrWrap || box.dataset.qrSet) return;
-      box.dataset.qrSet = '1';
-      urlEl.textContent = url;
-      qrWrap.innerHTML  = '';
-      box.style.display = 'block';
-      const tryQR = () => typeof QRCode !== 'undefined'
-        ? new QRCode(qrWrap, {text:url,width:68,height:68,colorDark:'#000',colorLight:'#fff',correctLevel:QRCode.CorrectLevel.M})
-        : setTimeout(tryQR, 200);
-      tryQR();
-    }
+      IS_ANDROID_NATIVE
+        ? 'Searching for Beam desktop app on your WiFi…'
+        : 'Checking network and Bluetooth availability';
 
     offlineConnType = 'wifi';
 
@@ -4421,15 +4380,15 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       }
     }
 
-    // Try to connect to LAN server (3s internal timeout in connectLanServer)
+    // Try to connect to LAN server
     const ws = await connectLanServer();
 
-    // Done — update UI immediately (no delay)
-    document.getElementById('offline-detect-ring').style.display = 'none';
-    document.getElementById('offline-detect-title').textContent  = ws ? 'Connected ✓' : 'Ready';
-    document.getElementById('offline-detect-sub').textContent    = '';
+    setTimeout(() => {
+      document.getElementById('offline-detect-ring').style.display = 'none';
+      document.getElementById('offline-detect-title').textContent  = 'Connection ready';
+      document.getElementById('offline-detect-sub').textContent    = '';
 
-    if (ws) {
+      if (ws) {
         lanWs = ws;
         setupLanMessageHandler(ws);
         document.getElementById('offline-chosen-mode-line').innerHTML =
@@ -4441,75 +4400,37 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         document.getElementById('offline-chosen-fallback').textContent =
           'Bluetooth fallback coming in Phase 3.';
 
-        // Show QR code when running in Electron
-        // Try getLanInfo() first; if null, fall back to health endpoint to get IP
+        // Show Android QR code when running in Electron
         if (IS_ELECTRON) {
-          const showQR = (ip, port) => {
-            const url    = `http://${ip}:${port}`;
-            const box    = document.getElementById('offline-android-box');
-            const urlEl  = document.getElementById('offline-android-url');
-            const qrWrap = document.getElementById('offline-qr-wrap');
-            if (!box || !urlEl || !qrWrap) return;
-            urlEl.textContent = url;
-            qrWrap.innerHTML  = '';
-            box.style.display = 'block';
-            const tryQR = () => {
-              if (typeof QRCode !== 'undefined') {
-                new QRCode(qrWrap, { text: url, width: 68, height: 68,
-                  colorDark: '#000000', colorLight: '#ffffff',
-                  correctLevel: QRCode.CorrectLevel.M });
-              } else { setTimeout(tryQR, 200); }
-            };
-            tryQR();
-          };
-
-          // Try IPC first, fall back to HTTP health endpoint
           window.electronAPI.getLanInfo().then(info => {
-            if (info && info.ip) {
-              showQR(info.ip, info.port);
-            } else {
-              // getLanInfo returned null — fetch IP from the running server directly
-              fetch(`http://localhost:${LAN_PORT}/health`)
-                .then(r => r.json())
-                .then(h => {
-                  // Health response has {ok, name, port} — get local IP from WebSocket
-                  const ip = new WebSocket(`ws://localhost:${LAN_PORT}`)
-                    && window.location.hostname || '127.0.0.1';
-                  // Use a dedicated endpoint or just show localhost as fallback
-                  fetch(`http://localhost:${LAN_PORT}/peers`)
-                    .then(() => {
-                      // Server is running — get IP via a small trick: connect and read
-                      const pc = new RTCPeerConnection({iceServers: [{urls: 'stun:stun.l.google.com:19302'}]});
-                      pc.createDataChannel('');
-                      pc.createOffer().then(o => pc.setLocalDescription(o));
-                      pc.onicecandidate = e => {
-                        if (!e || !e.candidate) return;
-                        const m = e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
-                        if (m && m[1] !== '0.0.0.0' && !m[1].startsWith('127.')) {
-                          showQR(m[1], LAN_PORT);
-                          pc.close();
-                        }
-                      };
-                      setTimeout(() => pc.close(), 3000);
-                    });
-                })
-                .catch(() => {});
+            if (!info) return;
+            const url     = `http://${info.ip}:${info.port}`;
+            const box     = document.getElementById('offline-android-box');
+            const urlEl   = document.getElementById('offline-android-url');
+            const qrWrap  = document.getElementById('offline-qr-wrap');
+            urlEl.textContent  = url;
+            qrWrap.innerHTML   = '';
+            box.style.display  = 'block';
+            // Generate QR code once the library has loaded
+            function makeQR() {
+              if (typeof QRCode !== 'undefined') {
+                new QRCode(qrWrap, {
+                  text:         url,
+                  width:        68,
+                  height:       68,
+                  colorDark:    '#000000',
+                  colorLight:   '#ffffff',
+                  correctLevel: QRCode.CorrectLevel.M,
+                });
+              } else {
+                setTimeout(makeQR, 200); // wait for CDN script to load
+              }
             }
+            makeQR();
           });
         }
       } else {
         // No LAN server found
-        if (IS_ELECTRON) {
-          // LAN server unreachable — show error with Retry button
-          document.getElementById('offline-detect-ring').style.display = 'none';
-          document.getElementById('offline-detect-title').textContent  = 'LAN server not reachable';
-          document.getElementById('offline-detect-sub').innerHTML =
-            'The local server could not be reached.<br>' +
-            '<button onclick="autoDetectConnection()" style="margin-top:12px;padding:8px 20px;' +
-            'border-radius:8px;border:1px solid rgba(16,185,129,.4);background:rgba(16,185,129,.1);' +
-            'color:#34d399;font-weight:700;cursor:pointer;font-size:.82rem;">🔄 Retry</button>';
-          return;
-        }
         if (IS_ANDROID_NATIVE) {
           // On Android: never show demo mode — show the not-found screen instead
           document.getElementById('offline-detect-ring').style.display = 'none';
@@ -4534,20 +4455,17 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       }
       document.getElementById('offline-chosen-result').style.display = 'block';
 
-      // Go straight to device list — no unnecessary delays
-      document.getElementById('offline-scanning-title').textContent =
-        ws ? 'Searching for nearby devices on WiFi…' : 'Searching for nearby devices…';
-      document.getElementById('offline-scan-note').textContent =
-        ws ? 'Make sure the receiver has Beam open on the same network'
-           : 'Real devices appear here when the desktop app is running';
-
       setTimeout(() => {
-        showOfflineStep('devices');
-        const deviceList = ws ? peers : (IS_ANDROID_NATIVE ? [] : FAKE_DEVICES);
-        renderDeviceList(deviceList);
+        document.getElementById('offline-scanning-title').textContent =
+          ws ? 'Searching for nearby devices on WiFi…' : 'Searching for nearby devices…';
+        document.getElementById('offline-scan-note').textContent =
+          ws ? 'Make sure the receiver has Beam open on the same network'
+             : 'Real devices appear here when the desktop app is running';
+        showOfflineStep('scanning');
 
-        // Legacy block kept for structure (was two nested setTimeouts)
-        if (true) {
+        setTimeout(() => {
+          const deviceList = ws ? peers : (IS_ANDROID_NATIVE ? [] : FAKE_DEVICES);
+          renderDeviceList(deviceList);
 
           // Show QR code if Android is running its own server
           if (IS_ANDROID_NATIVE && window.BeamNative?.isRunningServer?.()) {
@@ -4573,22 +4491,27 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 
           if (ws && deviceList.length === 0) {
             // Connected to LAN server but no other peers yet — show message inside device step
-          // After 15s still empty → suggest opening Beam on other device
-          setTimeout(() => {
-            const items = document.getElementById('offline-device-items');
-            if (items && items.innerHTML.includes('No devices')) {
-              items.innerHTML = `
-                <div style="text-align:center;padding:20px;color:var(--muted);font-size:.78rem;line-height:1.6">
-                  <div style="font-size:1.4rem;margin-bottom:8px">📱</div>
-                  <strong style="color:var(--muted-2)">No devices joined yet</strong><br>
-                  On the other device, open Beam and select <strong>Offline</strong> mode to appear here.
-                  <br><br>
-                  <button class="offline-retry-scan-btn" onclick="resetOfflineMode()" style="font-size:.75rem;padding:7px 16px">🔄 Scan again</button>
-                </div>`;
-            }
-          }, 15000);
-        }
-      }, 500); // fast — show device list in 0.5s
+            showOfflineStep('devices');
+            // After 15s still empty → suggest opening Beam on other device
+            setTimeout(() => {
+              const items = document.getElementById('offline-device-items');
+              if (items && items.innerHTML.includes('No devices')) {
+                items.innerHTML = `
+                  <div style="text-align:center;padding:20px;color:var(--muted);font-size:.78rem;line-height:1.6">
+                    <div style="font-size:1.4rem;margin-bottom:8px">📱</div>
+                    <strong style="color:var(--muted-2)">No devices joined yet</strong><br>
+                    On the other device, open Beam and select <strong>Offline</strong> mode to appear here.
+                    <br><br>
+                    <button class="offline-retry-scan-btn" onclick="resetOfflineMode()" style="font-size:.75rem;padding:7px 16px">Scan again</button>
+                  </div>`;
+              }
+            }, 15000);
+          } else {
+            showOfflineStep('devices');
+          }
+        }, ws ? 1000 : 2200);
+      }, 2800);
+    }, 1500);
   }
 
   // ── Device list rendering ─────────────────────────────────────────────────
