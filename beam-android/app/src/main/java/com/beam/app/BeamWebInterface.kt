@@ -144,6 +144,22 @@ class BeamWebInterface(private val context: Context) {
             context.startService(intent)
     }
 
+    /** Returns true when the device is currently on a WiFi network. */
+    @JavascriptInterface
+    fun isWifiConnected(): Boolean {
+        val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                as android.net.ConnectivityManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val network = cm.activeNetwork ?: return false
+            val caps    = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) ||
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI_AWARE)
+        } else {
+            @Suppress("DEPRECATION")
+            cm.activeNetworkInfo?.type == android.net.ConnectivityManager.TYPE_WIFI
+        }
+    }
+
     private fun jsonStr(s: String) =
         "\"${s.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 }

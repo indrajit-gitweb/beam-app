@@ -631,6 +631,15 @@
     .tg-fix { font-size: .72rem; color: var(--muted); line-height: 1.6; background: rgba(0,0,0,.2); border-radius: 6px; padding: 7px 10px; margin-top: 5px; font-family: monospace; }
 
     /* No device found state */
+    .offline-hotspot-tip {
+      display: flex; align-items: flex-start; gap: 8px;
+      margin: 12px 0 4px; padding: 10px 12px;
+      background: rgba(234,179,8,.07); border: 1px solid rgba(234,179,8,.25);
+      border-radius: 8px; font-size: .74rem; color: var(--muted-2);
+      line-height: 1.55; text-align: left;
+    }
+    .hotspot-tip-icon { font-size: 1rem; flex-shrink: 0; margin-top: 1px; }
+    .offline-hotspot-tip strong { color: #fbbf24; }
     .offline-notfound-wrap { text-align: center; padding: 18px 0 10px; }
     .offline-notfound-icon { font-size: 2rem; margin-bottom: 10px; }
     .offline-notfound-title { font-size: .92rem; font-weight: 700; color: var(--warn); margin-bottom: 8px; }
@@ -1102,6 +1111,10 @@
             <div class="offline-notfound-hint" id="offline-notfound-hint">
               Make sure the <strong>Beam desktop app</strong> is open on a Mac, Windows, or Linux device on the same WiFi network, then try again.
             </div>
+            <div class="offline-hotspot-tip" id="offline-hotspot-tip-nf" style="display:none">
+              <span class="hotspot-tip-icon">💡</span>
+              <span><strong>No shared WiFi?</strong> One person can turn on a <strong>mobile hotspot</strong>, the other connects to it — then Offline mode works perfectly with no internet needed.</span>
+            </div>
             <button class="offline-retry-scan-btn" onclick="resetOfflineMode()">🔄 Try again</button>
           </div>
         </div>
@@ -1112,6 +1125,10 @@
             <div class="offline-scan-ring"></div>
             <div class="offline-scanning-title" id="offline-scanning-title">Searching for nearby devices…</div>
             <div class="offline-scan-note" id="offline-scan-note">Make sure the receiver has Beam open on the same network</div>
+          </div>
+          <div class="offline-hotspot-tip" id="offline-hotspot-tip-scan" style="display:none">
+            <span class="hotspot-tip-icon">💡</span>
+            <span><strong>No WiFi nearby?</strong> One person creates a <strong>mobile hotspot</strong>, the other connects to it — no internet needed.</span>
           </div>
         </div>
 
@@ -3589,11 +3606,33 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // Note: mode card click is handled by selectMode('offline') in the global
   // selectMode function which calls window.resetOfflineMode() → autoDetectConnection()
 
+  // ── Hotspot tip visibility ────────────────────────────────────────────────
+  function showHotspotTip(stepId) {
+    const el = document.getElementById(stepId);
+    if (el) el.style.display = 'flex';
+  }
+
+  function checkAndShowHotspotTip() {
+    // On Android: check actual WiFi state via native API
+    if (isAndroid() && window.BeamNative) {
+      try {
+        const wifiOn = window.BeamNative.isWifiConnected();
+        if (!wifiOn) {
+          showHotspotTip('offline-hotspot-tip-scan');
+        }
+      } catch(_) {}
+      return;
+    }
+    // On other platforms: always show the tip during scanning as a helpful hint
+    // (no reliable way to check WiFi without native APIs)
+  }
+
   // ── Main detect / scan ────────────────────────────────────────────────────
   async function autoDetectConnection() {
     showOfflineStep('scanning');
     const scanNote = document.getElementById('offline-scan-note');
     if (scanNote) scanNote.textContent = 'Looking for Beam devices on your WiFi…';
+    checkAndShowHotspotTip();
 
     devices = [];
 
@@ -3608,6 +3647,9 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         isAndroid()
           ? 'Make sure the <strong>Beam desktop app</strong> is open on a Mac/Windows device on the same WiFi, then tap Try again.'
           : 'Make sure the <strong>Beam app</strong> is open on the other device on the same WiFi network.';
+      // Always show the hotspot tip when no devices found — most likely cause
+      // is the two devices aren't on the same network
+      showHotspotTip('offline-hotspot-tip-nf');
     } else {
       renderDeviceList();
       showOfflineStep('devices');
@@ -4315,6 +4357,10 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // ── Reset ──────────────────────────────────────────────────────────────────
   window.resetOfflineMode = function() {
     if (transferTimer)  { clearTimeout(transferTimer);   transferTimer  = null; }
+    // Hide hotspot tips so they re-evaluate on next scan
+    ['offline-hotspot-tip-scan','offline-hotspot-tip-nf'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.style.display = 'none';
+    });
     selectedDev         = null;
     pendingSessionId    = null;
     window._offlinePendingSessionId = null;
