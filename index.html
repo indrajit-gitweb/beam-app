@@ -717,15 +717,20 @@
     .offline-progress-wrap { margin-top: 6px; }
     .offline-progress-target { font-size: .78rem; color: var(--muted); margin-bottom: 12px; }
     .offline-progress-target strong { color: #34d399; }
-    .offline-speed-row {
-      display: flex; align-items: center; gap: 8px;
-      margin-top: 6px; font-size: .72rem; color: var(--muted);
-      font-variant-numeric: tabular-nums;
+    /* Rich transfer detail row — shown under progress bar on both sides */
+    .xfer-detail-row {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+      margin-top: 7px; font-size: .73rem; color: var(--muted);
+      font-variant-numeric: tabular-nums; line-height: 1.5;
     }
-    .offline-speed-row span:first-child {
-      color: #34d399; font-weight: 600; background: rgba(16,185,129,.1);
-      border: 1px solid rgba(16,185,129,.2); border-radius: 4px; padding: 1px 6px;
+    .xfer-bytes { color: var(--text); font-weight: 600; }
+    .xfer-speed {
+      color: #34d399; font-weight: 700;
+      background: rgba(16,185,129,.1); border: 1px solid rgba(16,185,129,.2);
+      border-radius: 4px; padding: 1px 7px;
     }
+    .xfer-dot  { color: var(--muted); opacity: .5; }
+    .xfer-sep  { color: var(--muted); }
 
     /* Success state */
     .offline-success-wrap { text-align: center; padding: 20px 0 8px; }
@@ -964,8 +969,14 @@
     <div class="progress-track">
       <div class="progress-fill active" id="lan-recv-fill" style="width:0%"></div>
     </div>
-    <div class="offline-speed-row" id="lan-recv-speed-row" style="display:none">
-      <span id="lan-recv-speed-val">—</span><span id="lan-recv-eta-val"></span>
+    <div class="xfer-detail-row" id="recv-detail-row" style="display:none">
+      <span class="xfer-bytes" id="recv-bytes-done">—</span>
+      <span class="xfer-sep">of</span>
+      <span id="recv-bytes-total">—</span>
+      <span class="xfer-dot">·</span>
+      <span class="xfer-speed" id="recv-speed">—</span>
+      <span class="xfer-dot">·</span>
+      <span id="recv-eta">—</span>
     </div>
   </div>
   <!-- Retry section — shown when one or more files failed -->
@@ -1134,8 +1145,14 @@
             <div class="progress-track">
               <div class="progress-fill active" id="offline-progress-fill" role="progressbar" style="width:0%"></div>
             </div>
-            <div class="offline-speed-row" id="offline-speed-row" style="display:none">
-              <span id="offline-speed-val">—</span><span id="offline-eta-val"></span>
+            <div class="xfer-detail-row" id="offline-detail-row" style="display:none">
+              <span class="xfer-bytes" id="offline-bytes-done">—</span>
+              <span class="xfer-sep">of</span>
+              <span id="offline-bytes-total">—</span>
+              <span class="xfer-dot">·</span>
+              <span class="xfer-speed" id="offline-speed">—</span>
+              <span class="xfer-dot">·</span>
+              <span id="offline-eta">—</span>
             </div>
             <!-- Fallback status message — shown when switching from WebRTC to HTTP -->
             <div class="transfer-fallback-msg" id="transfer-fallback-msg" style="display:none"></div>
@@ -3690,8 +3707,10 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       setOfflineProgress(0, 'Sending ' + file.name + '…');
       updateFileCounter(i + 1, totalFiles, file.name);
 
+      _speedWindow = []; _xferLastBytes = 0;  // reset per file
       try {
-        await uploadFile(receiverUrl, file, sessionId, i, totalFiles, fromName, pct => {
+        await uploadFile(receiverUrl, file, sessionId, i, totalFiles, fromName, (pct, sent, total) => {
+          window.onNativeTransferProgress(pct, file.name, sent, total);
           setOfflineProgress(pct, 'Sending ' + file.name + '…');
         });
       } catch(e) {
@@ -3714,7 +3733,6 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   }
 
   async function uploadFile(baseUrl, file, sessionId, fileIndex, totalFiles, fromName, onProgress) {
-    // Use XMLHttpRequest so we get upload progress events
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', baseUrl + '/upload');
@@ -3726,8 +3744,10 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       xhr.setRequestHeader('X-File-Index',  String(fileIndex));
       xhr.setRequestHeader('X-Total-Files', String(totalFiles));
       xhr.setRequestHeader('Content-Type',  file.type || 'application/octet-stream');
+      // Pass bytes alongside pct so caller can show "X MB of Y MB"
       xhr.upload.onprogress = e => {
-        if (e.lengthComputable) onProgress(Math.round(e.loaded * 100 / e.total));
+        if (e.lengthComputable)
+          onProgress(Math.round(e.loaded * 100 / e.total), e.loaded, e.total);
       };
       xhr.onload  = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(); else reject(new Error('HTTP ' + xhr.status)); };
       xhr.onerror = () => reject(new Error('Network error'));
@@ -3869,11 +3889,17 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }, 1000);
   }
 
-  // ── Speed / ETA helpers ────────────────────────────────────────────────────
-  let _xferStartTime = 0;
-  let _xferStartBytes = 0;
+  // ── Transfer stats helpers ─────────────────────────────────────────────────
 
+  function fmtBytes(b) {
+    if (!b || b <= 0) return '0 B';
+    if (b < 1024)        return b + ' B';
+    if (b < 1048576)     return (b / 1024).toFixed(1) + ' KB';
+    if (b < 1073741824)  return (b / 1048576).toFixed(1) + ' MB';
+    return (b / 1073741824).toFixed(2) + ' GB';
+  }
   function fmtSpeed(bps) {
+    if (!bps || bps <= 0) return '—';
     if (bps >= 1048576) return (bps / 1048576).toFixed(1) + ' MB/s';
     if (bps >= 1024)    return Math.round(bps / 1024) + ' KB/s';
     return Math.round(bps) + ' B/s';
@@ -3881,59 +3907,80 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   function fmtEta(secs) {
     if (!secs || !isFinite(secs) || secs <= 0) return '';
     if (secs < 60)   return Math.ceil(secs) + 's left';
-    if (secs < 3600) return Math.floor(secs/60) + 'm ' + Math.ceil(secs%60) + 's left';
-    return Math.floor(secs/3600) + 'h ' + Math.floor((secs%3600)/60) + 'm left';
+    if (secs < 3600) return Math.floor(secs / 60) + 'm ' + String(Math.ceil(secs % 60)).padStart(2,'0') + 's left';
+    return Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm left';
   }
 
-  function applySpeedEta(speedRowId, speedValId, etaValId, speed, etaSecs) {
-    const row = document.getElementById(speedRowId);
+  // Sliding window: keeps last 4s of (time, bytes) samples for smooth speed
+  let _speedWindow = [];   // [{t, b}]
+
+  function calcSpeed(bytesNow) {
+    const now = Date.now();
+    _speedWindow.push({ t: now, b: bytesNow });
+    // Keep only last 4 seconds
+    _speedWindow = _speedWindow.filter(s => now - s.t <= 4000);
+    if (_speedWindow.length < 2) return 0;
+    const oldest = _speedWindow[0];
+    const dt = (now - oldest.t) / 1000;
+    return dt > 0 ? (bytesNow - oldest.b) / dt : 0;
+  }
+
+  // Apply all stats to one detail row
+  function applyDetailRow(rowId, doneId, totalId, speedId, etaId,
+                           bytes, total, speed, etaSecs) {
+    const row = document.getElementById(rowId);
     if (!row) return;
-    if (speed > 0) {
+    if (bytes > 0 || total > 0 || speed > 0) {
       row.style.display = 'flex';
-      const sv = document.getElementById(speedValId);
-      const ev = document.getElementById(etaValId);
-      if (sv) sv.textContent = fmtSpeed(speed);
-      if (ev) ev.textContent = fmtEta(etaSecs) ? ' · ' + fmtEta(etaSecs) : '';
+      const doneEl  = document.getElementById(doneId);
+      const totalEl = document.getElementById(totalId);
+      const speedEl = document.getElementById(speedId);
+      const etaEl   = document.getElementById(etaId);
+      if (doneEl)  doneEl.textContent  = fmtBytes(bytes);
+      if (totalEl) totalEl.textContent = total > 0 ? fmtBytes(total) : '—';
+      if (speedEl) speedEl.textContent = fmtSpeed(speed);
+      if (etaEl)   etaEl.textContent   = fmtEta(etaSecs);
     } else {
       row.style.display = 'none';
     }
   }
 
+  let _xferLastBytes = 0;
+
   // ── Receive progress/complete (native callbacks) ───────────────────────────
-  // bytesTransferred and totalBytes are optional (passed when available)
   window.onNativeTransferProgress = function(pct, filename, bytesTransferred, totalBytes) {
-    const now   = Date.now();
     const bytes = bytesTransferred || 0;
-    const total = totalBytes || 0;
+    const total = totalBytes       || 0;
+    _xferLastBytes = bytes;
 
-    // Init speed tracking on first call for this transfer
-    if (!_xferStartTime || pct === 0) { _xferStartTime = now; _xferStartBytes = bytes; }
+    const speed   = calcSpeed(bytes);
+    const etaSecs = (speed > 0 && total > bytes) ? (total - bytes) / speed : 0;
 
-    const elapsedSec = Math.max((now - _xferStartTime) / 1000, 0.5);
-    const speed      = (bytes - _xferStartBytes) / elapsedSec;
-    const etaSecs    = (speed > 0 && total > bytes) ? (total - bytes) / speed : 0;
-
-    // Update sender-side bar (when we're the one sending)
+    // ── Sender-side (offline-step-transfer visible) ───────────────────────
     const offStep = document.getElementById('offline-step-transfer');
     if (offStep && offStep.style.display !== 'none') {
-      const fill = document.getElementById('offline-progress-fill');
+      const fill  = document.getElementById('offline-progress-fill');
       const pctEl = document.getElementById('offline-progress-pct');
       if (fill)  fill.style.width  = pct + '%';
       if (pctEl) pctEl.textContent = pct + '%';
-      applySpeedEta('offline-speed-row', 'offline-speed-val', 'offline-eta-val', speed, etaSecs);
+      applyDetailRow('offline-detail-row',
+        'offline-bytes-done','offline-bytes-total','offline-speed','offline-eta',
+        bytes, total, speed, etaSecs);
     }
 
-    // Update receiver-side bar (when we're receiving)
+    // ── Receiver-side (lan-recv-progress) ────────────────────────────────
     const recvFill = document.getElementById('lan-recv-fill');
     const recvPct  = document.getElementById('lan-recv-pct');
     if (recvFill) recvFill.style.width  = pct + '%';
     if (recvPct)  recvPct.textContent   = pct + '%';
-    applySpeedEta('lan-recv-speed-row', 'lan-recv-speed-val', 'lan-recv-eta-val', speed, etaSecs);
+    applyDetailRow('recv-detail-row',
+      'recv-bytes-done','recv-bytes-total','recv-speed','recv-eta',
+      bytes, total, speed, etaSecs);
   };
 
   window.onNativeTransferComplete = function(filename, savedPath, fromName) {
-    _xferStartTime = 0; _xferStartBytes = 0; // reset speed tracking
-    ['offline-speed-row','lan-recv-speed-row'].forEach(id => {
+    _speedWindow = []; _xferLastBytes = 0;  // reset speed tracking
+    ['offline-detail-row','recv-detail-row'].forEach(id => {
       const el = document.getElementById(id); if (el) el.style.display = 'none';
     });
     // Sender-side complete
