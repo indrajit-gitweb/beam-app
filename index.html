@@ -1227,6 +1227,19 @@
           <div id="peer-code" aria-live="polite">——————</div>
           <button class="copy-btn" id="copy-link-btn" aria-label="Copy shareable link">Copy link</button>
         </div>
+        <!-- QR code — receiver scans with phone camera, opens Beam in browser, auto-connects -->
+        <div id="p2p-qr-wrap" style="display:none;margin-top:16px;text-align:center;">
+          <p style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;">
+            📷 Or scan to connect instantly — no app needed
+          </p>
+          <div style="display:inline-flex;align-items:center;gap:16px;background:var(--surface-2);border:1px solid var(--border-2);border-radius:var(--radius-sm);padding:14px 18px;">
+            <div id="p2p-qr-code" style="background:#fff;border-radius:6px;padding:6px;width:90px;height:90px;display:flex;align-items:center;justify-content:center;flex-shrink:0;"></div>
+            <div style="text-align:left;">
+              <div style="font-size:.78rem;font-weight:700;color:var(--text);margin-bottom:4px;">Scan with phone camera</div>
+              <div style="font-size:.72rem;color:var(--muted-2);line-height:1.5;">Opens Beam in browser<br>Auto-connects to this sender<br>No app install needed ✅</div>
+            </div>
+          </div>
+        </div>
         <!-- Keep-open warning -->
         <div class="keep-open-note" id="keep-open-note">
           <span class="kon-icon"><svg class="icon" width="16" height="16"><use href="#ico-warn"/></svg></span>
@@ -4050,6 +4063,12 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     offlineSection.style.display = 'block';
     const ss = document.getElementById('send-status');
     if (ss) ss.textContent = '';
+
+    // ── Show QR code immediately when offline mode opens ──────────────────
+    // Receiver scans → browser opens → auto-connects → no app needed
+    // Runs in parallel with autoDetectConnection(), no blocking
+    showOfflineQR();
+
     autoDetectConnection();
   };
 
@@ -4072,12 +4091,66 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     peers = [];
   }
 
+  // ── QR code for offline mode ──────────────────────────────────────────────
+  // Shows immediately when offline mode opens — receiver scans, browser opens,
+  // loads Beam, auto-connects to this device's LAN server. No app needed.
+
+  function showOfflineQR() {
+    const box    = document.getElementById('offline-android-box');
+    const urlEl  = document.getElementById('offline-android-url');
+    const qrWrap = document.getElementById('offline-qr-wrap');
+    if (!box || !urlEl || !qrWrap) return;
+
+    function renderQR(url) {
+      if (!url) return;
+      urlEl.textContent = url;
+      qrWrap.innerHTML  = '';
+      box.style.display = 'block';
+      const tryQR = () => {
+        if (typeof QRCode !== 'undefined') {
+          new QRCode(qrWrap, { text: url, width: 68, height: 68,
+            colorDark: '#000', colorLight: '#fff', correctLevel: QRCode.CorrectLevel.M });
+        } else { setTimeout(tryQR, 300); }
+      };
+      tryQR();
+    }
+
+    if (IS_ELECTRON) {
+      // Mac: get IP from IPC, fall back to WebRTC ICE candidate trick
+      window.electronAPI.getLanInfo().then(info => {
+        if (info && info.ip) { renderQR(`http://${info.ip}:${info.port}`); return; }
+        // Fallback: discover local IP via WebRTC
+        try {
+          const pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+          pc.createDataChannel('');
+          pc.createOffer().then(o => pc.setLocalDescription(o));
+          pc.onicecandidate = e => {
+            if (!e?.candidate) return;
+            const m = e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
+            if (m && m[1] !== '0.0.0.0' && !m[1].startsWith('127.')) {
+              renderQR(`http://${m[1]}:${LAN_PORT}`);
+              pc.close();
+            }
+          };
+          setTimeout(() => pc.close(), 3000);
+        } catch(_) {}
+      });
+    } else if (IS_ANDROID_NATIVE && window.BeamNative?.isRunningServer?.()) {
+      // Android running its own LAN server
+      const url = window.BeamNative.getLocalServerUrl();
+      if (url) renderQR(url);
+    } else if (window.location.hostname && window.location.hostname !== 'localhost') {
+      // Browser served from a LAN server
+      renderQR(`http://${window.location.hostname}:${LAN_PORT}`);
+    }
+  }
+
   // ── Auto-detect connection ──────────────────────────────────────────────
 
   async function autoDetectConnection() {
     showOfflineStep('conn');
     document.getElementById('offline-chosen-result').style.display = 'none';
-    document.getElementById('offline-android-box').style.display   = 'none';
+    // QR code box stays visible through all steps — do not hide it here
     document.getElementById('offline-detect-ring').style.display   = '';
     document.getElementById('offline-detect-title').textContent    = 'Detecting best connection…';
     document.getElementById('offline-detect-sub').textContent      =
@@ -4145,35 +4218,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         document.getElementById('offline-chosen-fallback').textContent =
           'Bluetooth fallback coming in Phase 3.';
 
-        // Show Android QR code when running in Electron
-        if (IS_ELECTRON) {
-          window.electronAPI.getLanInfo().then(info => {
-            if (!info) return;
-            const url     = `http://${info.ip}:${info.port}`;
-            const box     = document.getElementById('offline-android-box');
-            const urlEl   = document.getElementById('offline-android-url');
-            const qrWrap  = document.getElementById('offline-qr-wrap');
-            urlEl.textContent  = url;
-            qrWrap.innerHTML   = '';
-            box.style.display  = 'block';
-            // Generate QR code once the library has loaded
-            function makeQR() {
-              if (typeof QRCode !== 'undefined') {
-                new QRCode(qrWrap, {
-                  text:         url,
-                  width:        68,
-                  height:       68,
-                  colorDark:    '#000000',
-                  colorLight:   '#ffffff',
-                  correctLevel: QRCode.CorrectLevel.M,
-                });
-              } else {
-                setTimeout(makeQR, 200); // wait for CDN script to load
-              }
-            }
-            makeQR();
-          });
-        }
+        // QR already shown by showOfflineQR() — nothing to do here
       } else {
         // No LAN server found
         if (IS_ANDROID_NATIVE) {
