@@ -3751,9 +3751,14 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   async function tryHttpTransfer(targetId, files, onProgress, onFileChange) {
     try {
       const lanInfo    = IS_ELECTRON ? await window.electronAPI.getLanInfo() : null;
+      // Android native: always use localhost (own server)
+      // Browser from LAN: use hostname from URL
+      // Electron: use getLanInfo port
       const uploadBase = lanInfo
         ? `http://localhost:${lanInfo.port}`
-        : `http://${window.location.hostname}:${LAN_PORT}`;
+        : (IS_ANDROID_NATIVE || !!window.BeamNative)
+          ? `http://localhost:${LAN_PORT}`
+          : `http://${window.location.hostname}:${LAN_PORT}`;
 
       const totalSize    = files.reduce((s, f) => s + f.size, 0);
       const expiryMins   = calcExpiryMinutes(files);

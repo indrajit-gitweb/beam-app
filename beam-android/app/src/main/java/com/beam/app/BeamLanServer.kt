@@ -204,7 +204,9 @@ class BeamLanServer(
                     send(JSONObject().apply { put("type", "registered"); put("id", peerId) }.toString())
                     broadcastPeerList()
                     Log.d(TAG, "Peer registered: $peerId (${peerMeta[peerId!!]?.name})")
+                    startKeepAlive() // keep connection alive
                 }
+                "ping" -> { /* keepalive from client — no response needed */ }
                 "signal", "transfer-request", "transfer-accept", "transfer-decline" -> {
                     val to     = json.optString("to")
                     val target = peers[to] ?: return
@@ -224,6 +226,22 @@ class BeamLanServer(
         }
 
         override fun onPong(pong: WebSocketFrame) {}
+
+        // Send periodic ping to keep connection alive and detect drops
+        fun startKeepAlive() {
+            mainHandler.postDelayed(object : Runnable {
+                override fun run() {
+                    try {
+                        if (peerId != null) {
+                            ping("beam".toByteArray())
+                            mainHandler.postDelayed(this, 15000)
+                        }
+                    } catch (e: Exception) {
+                        // Connection dead — cleanup handled by onClose
+                    }
+                }
+            }, 15000)
+        }
     }
 
     private fun broadcastPeerList() {
