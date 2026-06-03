@@ -2906,6 +2906,39 @@ dropZone.addEventListener('drop', e => {
 dropZone.addEventListener('click', () => fileInput.click());
 dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
 
+// ── macOS Open With / Dock drop / Services handler ────────────────────────────
+// Called by Electron when macOS sends files to Beam via:
+//   - Finder → right-click → Open With → Beam
+//   - Drag files onto Beam's dock icon
+//   - Finder → right-click → Services → Send with Beam
+if (window.electronAPI?.onOpenFiles) {
+  window.electronAPI.onOpenFiles(function(files) {
+    if (!files || !files.length) return;
+    // Read each file from disk via fetch (file:// path) and create a real File
+    // object so all transfer modes (P2P, Cloud, Offline) work correctly.
+    Promise.all(files.map(async meta => {
+      try {
+        const resp = await fetch('file://' + meta.path);
+        const blob = await resp.blob();
+        return new File([blob], meta.name,
+          { type: meta.type || blob.type || 'application/octet-stream' });
+      } catch(_) {
+        // Fallback: synthetic object (works for Offline / size display)
+        const f = new File([], meta.name, { type: meta.type || 'application/octet-stream' });
+        Object.defineProperty(f, 'size', { value: meta.size || 0 });
+        return f;
+      }
+    })).then(fileObjs => {
+      addFilesToQueue(fileObjs);
+      if (typeof showPopup === 'function')
+        showPopup('📤', 'Files ready to send',
+          fileObjs.length + ' file' + (fileObjs.length > 1 ? 's' : '') +
+          ' loaded. Choose a transfer mode and send.',
+          'success', 4000);
+    });
+  });
+}
+
 // ── Android Share Target handler ───────────────────────────────────────────
 // Called by MainActivity when Beam is opened via the system share sheet.
 // filesJson: [{name, size, type}, ...] — metadata only (content read natively).
