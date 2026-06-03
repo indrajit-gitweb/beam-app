@@ -5538,14 +5538,18 @@ window.dismissRetrySection = function() {
 
 </script>
 
-<!-- Offline mode browser restriction — separate non-module script so it
-     runs independently of any module execution errors -->
+<!-- Offline mode browser restriction — web browsers only, never apps -->
 <script>
 (function() {
-  var isApp = !!(window.electronAPI || window.BeamNative || window.__BEAM_NATIVE_ANDROID__);
-  if (isApp) return;
+  function isAppEnv() {
+    // Re-check every time — BeamNative may not be injected yet on first run
+    return !!(window.electronAPI || window.BeamNative || window.__BEAM_NATIVE_ANDROID__);
+  }
 
   function apply() {
+    // Exit if running inside any app — check on every call in case injection happened
+    if (isAppEnv()) return;
+
     var card = document.getElementById('mode-offline');
     if (card) {
       card.classList.add('unavailable');
@@ -5562,9 +5566,14 @@ window.dismissRetrySection = function() {
   var ms = document.getElementById('mode-selector');
   if (ms) new MutationObserver(apply).observe(ms, { attributes: true, attributeFilter: ['style'] });
 
-  // Retry every 500ms for 10s to survive any race conditions
+  // Retry every 500ms for 10s — on Android, BeamNative may arrive slightly
+  // after page parse, so re-check isAppEnv() on each retry
   var n = 0;
-  var iv = setInterval(function() { apply(); if (++n >= 20) clearInterval(iv); }, 500);
+  var iv = setInterval(function() {
+    if (isAppEnv()) { clearInterval(iv); return; } // app detected — stop immediately
+    apply();
+    if (++n >= 20) clearInterval(iv);
+  }, 500);
 })();
 </script>
 </body>
