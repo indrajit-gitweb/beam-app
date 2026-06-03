@@ -204,7 +204,33 @@ class MainActivity : AppCompatActivity() {
                 webView.visibility     = View.VISIBLE
                 webView.evaluateJavascript("window.__BEAM_NATIVE_ANDROID__ = true;", null)
             }
-            override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest) = false
+
+            override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
+                val url  = req.url.toString()
+                val host = req.url.host ?: ""
+
+                // Keep local/internal URLs inside the WebView
+                if (url.startsWith("file://") ||
+                    host == "localhost" ||
+                    host == "127.0.0.1" ||
+                    host.matches(Regex("^192\\.168\\..*")) ||
+                    host.matches(Regex("^10\\..*")) ||
+                    host.matches(Regex("^172\\.(1[6-9]|2[0-9]|3[01])\\..*"))) {
+                    return false
+                }
+
+                // Open all external URLs with Android's Intent system so
+                // WhatsApp, Telegram, Gmail and mail clients launch properly.
+                // The WebView stays on the Beam page — user comes back to the
+                // share screen intact after switching to the other app.
+                return try {
+                    startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, req.url))
+                    true
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "Cannot open external URL: $url — ${e.message}")
+                    false  // fall back to WebView if no app handles it
+                }
+            }
         }
 
         webView.webChromeClient = object : WebChromeClient() {
