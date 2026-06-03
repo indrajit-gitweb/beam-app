@@ -4015,7 +4015,27 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     ws.onclose = () => {
       lanWs = null;
       peers = [];
+      // Auto-reconnect after 2s if offline mode is still active
+      if (document.getElementById('offline-section')?.style.display !== 'none') {
+        setTimeout(() => {
+          if (!lanWs) {
+            console.log('[beam-lan] Reconnecting after drop…');
+            connectLanServer().then(newWs => {
+              if (newWs) { lanWs = newWs; setupLanMessageHandler(newWs); }
+            });
+          }
+        }, 2000);
+      }
     };
+
+    // Send ping every 15s to keep connection alive
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ping' }));
+      } else {
+        clearInterval(pingInterval);
+      }
+    }, 15000);
   }
 
   // ── Mode selection ────────────────────────────────────────────────────────
@@ -4442,11 +4462,24 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         document.getElementById('offline-fail-detail').textContent =
           `${dev.name} did not accept the transfer in time. Make sure they have the Beam page open and tapped Accept on the incoming popup.`;
       }, 60000);
-    } else if (IS_ANDROID_NATIVE) {
-      // Android with no LAN connection — show error, never simulate
-      showOfflineStep('fail');
-      document.getElementById('offline-fail-detail').textContent =
-        'Not connected to a Beam LAN server. Go back and scan the QR code or enter the IP address of the Beam desktop app.';
+    } else if (IS_ANDROID_NATIVE || !!window.BeamNative) {
+      // Android — lanWs dropped, reconnect and retry automatically
+      document.getElementById('offline-waiting-device').textContent = dev.name;
+      showOfflineStep('waiting');
+      document.getElementById('offline-waiting-title') &&
+        (document.getElementById('offline-waiting-title').textContent = 'Reconnecting…');
+      // Reconnect to own server and retry
+      connectLanServer().then(ws => {
+        if (ws) {
+          lanWs = ws;
+          setupLanMessageHandler(ws);
+          setTimeout(() => selectOfflineDevice(dev), 1000); // retry
+        } else {
+          showOfflineStep('fail');
+          document.getElementById('offline-fail-detail').textContent =
+            'Lost connection to LAN server. Please tap "Scan again" to reconnect.';
+        }
+      });
     } else {
       // Browser demo mode only — simulate acceptance after 2.5s
       setTimeout(() => startSimulatedTransfer(), 2500);
