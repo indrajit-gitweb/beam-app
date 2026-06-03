@@ -1017,6 +1017,20 @@
   </div>
 </div>
 
+<!-- Beam Blaze incoming overlay — global, appears on ANY tab when a Blaze
+     sender finds this device (receiver just has Receive tab open)           -->
+<div id="blaze-incoming-overlay" class="lan-incoming-overlay" style="display:none">
+  <div class="lan-incoming-header">
+    🔥 Beam Blaze — incoming transfer
+  </div>
+  <div class="lan-incoming-file" id="blaze-incoming-name">Unknown device</div>
+  <div class="lan-incoming-meta" id="blaze-incoming-meta">wants to send files via Beam Blaze</div>
+  <div class="lan-incoming-btns">
+    <button class="lan-incoming-accept"  onclick="acceptBlazeIncoming()">✓ Accept</button>
+    <button class="lan-incoming-decline" onclick="declineBlazeIncoming()">✕ Decline</button>
+  </div>
+</div>
+
 <div class="page">
 
   <header class="header">
@@ -1162,7 +1176,8 @@
               🔥 Beam Blaze — searching nearby…
             </div>
             <div class="offline-scan-note">
-              Open Beam on the other device and tap <strong>Beam Blaze 🔥</strong> too
+              Ask the other person to open <strong>Beam</strong> and tap
+              <strong>Receive</strong> — that's all they need to do
             </div>
           </div>
         </div>
@@ -1175,18 +1190,6 @@
           </div>
         </div>
 
-        <!-- Beam Blaze: incoming connection popup (shown as overlay) -->
-        <div id="blaze-incoming-overlay" class="lan-incoming-overlay" style="display:none">
-          <div class="lan-incoming-header">
-            🔥 Beam Blaze — incoming connection
-          </div>
-          <div class="lan-incoming-file" id="blaze-incoming-name">Unknown device</div>
-          <div class="lan-incoming-meta" id="blaze-incoming-meta">wants to connect via Beam Blaze</div>
-          <div class="lan-incoming-btns">
-            <button class="lan-incoming-accept" onclick="acceptBlazeIncoming()">✓ Accept</button>
-            <button class="lan-incoming-decline" onclick="declineBlazeIncoming()">✕ Decline</button>
-          </div>
-        </div>
 
         <!-- Step 2: scanning for devices -->
         <div id="offline-step-scanning" style="display:none">
@@ -2085,6 +2088,18 @@ window.switchTab = function(id) {
   document.querySelectorAll('.panel').forEach(p => {
     p.classList.toggle('active', p.id===`panel-${id}`);
   });
+
+  // Beam Blaze: silently start advertising when Receive tab opens so this
+  // device is discoverable by a Beam Blaze sender — no prompt, no UI change.
+  // Only works if Blaze permissions were already granted (e.g. from a previous
+  // Blaze session). If not granted, startBlazeAdvertising() does nothing.
+  if (window.BeamNative) {
+    if (id === 'recv') {
+      try { window.BeamNative.startBlazeAdvertising(); } catch(_) {}
+    } else {
+      try { window.BeamNative.stopBlazeAdvertising(); } catch(_) {}
+    }
+  }
 };
 
 // ── Notification helpers ──────────────────────────────────────────────────────

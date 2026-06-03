@@ -531,6 +531,31 @@ class MainActivity : AppCompatActivity(), BeamWebInterface.BlazeHost {
         beamBlaze = null
     }
 
+    override fun startBlazeReceiveMode() {
+        // Only start if all permissions already granted — never prompt here
+        val hasPerms = blazePermissions.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+        if (!hasPerms) return  // silently skip, no UI change
+
+        // Don't interrupt an active Blaze sender session
+        if (beamBlaze != null && !beamBlaze!!.advertisingOnly) return
+
+        beamBlaze?.stop()
+        beamBlaze = BeamBlazeManager(this, android.os.Build.MODEL)
+        beamBlaze!!.startReceiveMode(blazeCb)
+        Log.d("MainActivity", "Beam Blaze receive mode started (Receive tab opened)")
+    }
+
+    override fun stopBlazeReceiveMode() {
+        // Only stop if we're in passive receive mode — don't interrupt active sender
+        if (beamBlaze?.advertisingOnly == true) {
+            beamBlaze?.stop()
+            beamBlaze = null
+            Log.d("MainActivity", "Beam Blaze receive mode stopped")
+        }
+    }
+
     override fun requestBlazeConnection(endpointId: String) {
         beamBlaze?.requestConnection(endpointId)
     }

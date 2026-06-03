@@ -55,6 +55,7 @@ class BeamBlazeManager(
 
     private val client: ConnectionsClient = Nearby.getConnectionsClient(context)
     private var callback: BlazeCallback?  = null
+    var advertisingOnly: Boolean = false   // true = receive-only mode
     private val endpointNames = mutableMapOf<String, String>()  // endpointId → name
     private var activePayloadId: Long? = null
     private var activeFilename: String = ""
@@ -62,10 +63,24 @@ class BeamBlazeManager(
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
+    /** Full mode: advertise + discover (sender initiates) */
     fun start(cb: BlazeCallback) {
-        callback = cb
+        callback        = cb
+        advertisingOnly = false
         startAdvertising()
         startDiscovery()
+    }
+
+    /**
+     * Receive-only mode: advertise only, no discovery.
+     * Called silently when the user opens the Receive tab — makes this device
+     * visible to Beam Blaze senders without any UI change for the receiver.
+     */
+    fun startReceiveMode(cb: BlazeCallback) {
+        callback        = cb
+        advertisingOnly = true
+        startAdvertising()
+        // No discovery — receiver just waits for incoming connections
     }
 
     fun stop() {

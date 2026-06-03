@@ -154,6 +154,17 @@ class BeamWebInterface(private val context: Context) {
     @JavascriptInterface
     fun stopBeamBlaze() { blazeCallback?.stopBlaze() }
 
+    /**
+     * Silently start Blaze advertising when Receive tab opens.
+     * Does nothing if Blaze permissions haven't been granted yet — no prompt shown.
+     */
+    @JavascriptInterface
+    fun startBlazeAdvertising() { blazeCallback?.startBlazeReceiveMode() }
+
+    /** Stop silent Blaze advertising when Receive tab is left */
+    @JavascriptInterface
+    fun stopBlazeAdvertising() { blazeCallback?.stopBlazeReceiveMode() }
+
     /** Sender: request connection to a discovered endpoint */
     @JavascriptInterface
     fun blazeRequestConnection(endpointId: String) { blazeCallback?.requestBlazeConnection(endpointId) }
@@ -176,6 +187,8 @@ class BeamWebInterface(private val context: Context) {
     interface BlazeHost {
         fun startBlaze()
         fun stopBlaze()
+        fun startBlazeReceiveMode()
+        fun stopBlazeReceiveMode()
         fun requestBlazeConnection(endpointId: String)
         fun acceptBlazeConnection(endpointId: String)
         fun declineBlazeConnection(endpointId: String)
