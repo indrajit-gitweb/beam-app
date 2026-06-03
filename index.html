@@ -609,21 +609,6 @@
     .mode-card.offline .mode-card-name { margin-bottom: 2px; }
     .mode-card.offline.active { border-color: #10b981; background: rgba(16,185,129,0.08); }
     .mode-card.offline.active .mode-card-name { color: #34d399; }
-    /* Disabled state — web browser users (strong visual) */
-    .mode-card.offline.unavailable {
-      opacity: .55; cursor: not-allowed;
-      border: 1.5px dashed rgba(239,68,68,.5) !important;
-      background: rgba(239,68,68,.04) !important;
-      position: relative;
-    }
-    .mode-card.offline.unavailable:hover { border-color: rgba(239,68,68,.7) !important; background: rgba(239,68,68,.06) !important; }
-    .mode-card.offline.unavailable .mode-card-name { color: var(--muted-2) !important; }
-    .mode-card.offline.unavailable .mode-card-icon svg { color: var(--muted) !important; }
-    /* App-required banner inside the card */
-    .offline-app-required-msg { width: 100%; margin-top: 6px; font-size: .71rem; color: rgba(239,68,68,.9); font-weight: 600; line-height: 1.4; display: none; }
-    .mode-card.offline.unavailable .offline-app-required-msg { display: block; }
-    /* "App only" red badge */
-    .offline-unavailable-tag { margin-left: auto; flex-shrink: 0; font-size: .66rem; font-weight: 700; padding: 3px 9px; border-radius: 99px; background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.35); color: var(--error); white-space: nowrap; }
 
     /* ── Offline section (inside send panel) ── */
     #offline-section { margin-top: 18px; }
@@ -1041,17 +1026,10 @@
             <div class="mode-card-name">Cloud Transfer</div>
             <div class="mode-card-desc">Upload to cloud · Sender can close tab · Auto-expires</div>
           </div>
-          <div class="mode-card offline" id="mode-offline" role="button" tabindex="0" onclick="selectMode('offline')" onkeydown="if(event.key==='Enter')selectMode('offline')" style="flex-wrap:wrap;">
+          <div class="mode-card offline" id="mode-offline" role="button" tabindex="0" onclick="selectMode('offline')" onkeydown="if(event.key==='Enter')selectMode('offline')">
             <div class="mode-card-icon"><svg class="icon" width="22" height="22"><use href="#ico-wifi"/></svg></div>
-            <div style="flex:1;min-width:0;">
-              <div class="mode-card-name">Offline</div>
-              <div class="mode-card-desc">Same WiFi or Bluetooth · No internet needed · Local devices</div>
-            </div>
-            <span class="offline-unavailable-tag" id="offline-app-tag" style="display:none">App only</span>
-            <!-- Message shown only when unavailable (browser users) -->
-            <div class="offline-app-required-msg" id="offline-app-required-msg">
-              ⚠️ Not available in browser — requires the Beam desktop or Android app. Use P2P or Cloud instead.
-            </div>
+            <div class="mode-card-name">Offline</div>
+            <div class="mode-card-desc">Same WiFi or Bluetooth · No internet needed · Local devices</div>
           </div>
         </div>
       </div>
@@ -1616,15 +1594,6 @@
 
     <!-- Offline steps -->
     <div class="hiw-mode" id="hiw-offline">
-      <!-- Warning banner — shown only in browser, hidden in app -->
-      <div id="hiw-offline-browser-warning" style="display:none;margin-bottom:18px;padding:14px 18px;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.25);border-radius:var(--radius-sm);">
-        <p style="font-size:.82rem;font-weight:700;color:var(--error);margin-bottom:5px;">⚠️ Offline mode is not available in the browser</p>
-        <p style="font-size:.76rem;color:var(--muted-2);line-height:1.6;">
-          This feature requires the <strong style="color:var(--text)">Beam desktop app</strong> (Mac / Windows / Linux) or the <strong style="color:var(--text)">Android app</strong> to run a local server on your device.<br>
-          In the browser, use <strong style="color:var(--accent-2)">P2P Direct</strong> or <strong style="color:#38bdf8">Cloud Transfer</strong> instead.
-          <a href="https://github.com/indrajit-gitweb/beam-app/actions" target="_blank" rel="noopener" style="color:#34d399;margin-left:6px;font-weight:700;">↓ Download app</a>
-        </p>
-      </div>
       <div class="how-grid">
         <div class="how-col offline-send-col">
           <div class="how-col-title"><svg class="icon" width="14" height="14"><use href="#ico-send"/></svg> Send Files</div>
@@ -4124,18 +4093,6 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
           window._offlineIncomingFile   = { name: msg.filename, size: msg.filesize };
           break;
         }
-
-        case 'external-server-found': {
-          // Mac's LAN server discovered another Beam server (e.g. Android)
-          // via active mDNS browsing. Connect to it so both sides see each other.
-          const extUrl = msg.url;
-          if (!extUrl || externalServers.has(extUrl)) break;
-          externalServers.add(extUrl);
-
-          console.log('[beam-lan] Connecting to external server:', extUrl);
-          connectToExternalServer(extUrl, msg.deviceName);
-          break;
-        }
       }
     };
 
@@ -4145,118 +4102,10 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     };
   }
 
-  // ── External server connections (Mac discovers Android) ───────────────────
-  // When Mac's mDNS browser finds another Beam server, Mac's frontend
-  // connects to it as a peer. Both sides now see each other in device list.
-
-  const externalServers = new Set();     // URLs already connected
-  const externalWsMap   = new Map();     // url → WebSocket
-
-  async function connectToExternalServer(url, deviceName) {
-    const wsUrl = url.replace(/^http/, 'ws');
-    const extWs = new WebSocket(wsUrl);
-    const timeout = setTimeout(() => { extWs.close(); }, 5000);
-
-    extWs.onopen = () => {
-      clearTimeout(timeout);
-      extWs.send(JSON.stringify({
-        type:       'register',
-        id:         myPeerId   || ('ext-' + Math.random().toString(36).slice(2)),
-        name:       myPeerName || 'Mac',
-        deviceType: 'laptop',
-      }));
-      externalWsMap.set(url, extWs);
-      console.log('[beam-lan] Connected to external server:', url);
-    };
-
-    extWs.onmessage = event => {
-      let msg2;
-      try { msg2 = JSON.parse(event.data); } catch { return; }
-
-      if (msg2.type === 'peers') {
-        // Merge external peers into our list (tagged so we know which server to use)
-        const extPeers = msg2.list
-          .filter(p => p.id !== myPeerId)
-          .map(p => ({ ...p, _externalWs: extWs, _externalUrl: url }));
-
-        // Deduplicate and update device list
-        const merged = [...peers.filter(p => !p._externalUrl || p._externalUrl !== url), ...extPeers];
-        peers = merged;
-
-        const devStep = document.getElementById('offline-step-devices');
-        if (devStep && devStep.style.display !== 'none') {
-          renderDeviceList(peers);
-        }
-      }
-
-      // Forward signals from external server (for WebRTC if needed)
-      if (msg2.type === 'signal' && lanWs && lanWs.readyState === WebSocket.OPEN) {
-        lanWs.send(JSON.stringify(msg2));
-      }
-    };
-
-    extWs.onclose = () => {
-      externalServers.delete(url);
-      externalWsMap.delete(url);
-      peers = peers.filter(p => p._externalUrl !== url);
-    };
-  }
-
-  // Use the correct WebSocket for signalling depending on which server the peer is on
-  function sendSignal(targetPeer, payload) {
-    if (targetPeer._externalWs && targetPeer._externalWs.readyState === WebSocket.OPEN) {
-      targetPeer._externalWs.send(JSON.stringify(payload));
-    } else if (lanWs && lanWs.readyState === WebSocket.OPEN) {
-      lanWs.send(JSON.stringify(payload));
-    }
-  }
-
   // ── Mode selection ────────────────────────────────────────────────────────
-
-  // ── Disable Offline mode in web browser — requires desktop or Android app ──
-  const _isOfflineAvailable = IS_ELECTRON || IS_ANDROID_NATIVE;
-
-  function applyOfflineUnavailableStyles() {
-    if (_isOfflineAvailable) return;
-    const card = document.getElementById('mode-offline');
-    if (!card) return;
-    card.classList.add('unavailable');
-    card.setAttribute('aria-disabled', 'true');
-    const tag = document.getElementById('offline-app-tag');
-    if (tag) tag.style.display = 'inline-flex';
-    const hiwWarning = document.getElementById('hiw-offline-browser-warning');
-    if (hiwWarning) hiwWarning.style.display = 'block';
-  }
-
-  // Apply immediately (in case DOM is ready)
-  applyOfflineUnavailableStyles();
-
-  // Also apply whenever the mode selector becomes visible (files queued)
-  // Use MutationObserver to catch when #mode-selector display changes
-  if (!_isOfflineAvailable) {
-    const modeSelector = document.getElementById('mode-selector');
-    if (modeSelector) {
-      const obs = new MutationObserver(() => {
-        if (modeSelector.style.display !== 'none') {
-          applyOfflineUnavailableStyles();
-        }
-      });
-      obs.observe(modeSelector, { attributes: true, attributeFilter: ['style'] });
-    }
-  }
 
   const _origSelectMode = window.selectMode;
   window.selectMode = function(mode) {
-    if (mode === 'offline' && !_isOfflineAvailable) {
-      // Browser user tapped Offline — show download prompt instead
-      if (typeof showPopup === 'function') {
-        showPopup('📱', 'App required for Offline mode',
-          'Offline transfers need the Beam desktop app (Mac/Windows/Linux) or Android app. Download free from GitHub.',
-          'warn', 8000);
-      }
-      return; // do not activate offline mode
-    }
-
     if (mode !== 'offline') {
       offlineSection.style.display      = 'none';
       offlineRecvSection.style.display  = 'none';
@@ -4557,11 +4406,10 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     document.getElementById('offline-waiting-device').textContent = dev.name;
     showOfflineStep('waiting');
 
-    const devWs = dev._externalWs || lanWs;
-    if (devWs && devWs.readyState === WebSocket.OPEN) {
-      // Real mode: send transfer request via the correct server (own or external)
+    if (lanWs && lanWs.readyState === WebSocket.OPEN) {
+      // Real mode: send transfer request and wait for acceptance
       const files = filesToSend;
-      devWs.send(JSON.stringify({
+      lanWs.send(JSON.stringify({
         type:  'transfer-request',
         to:    dev.id,
         files: files.map(f => ({ name: f.name, size: f.size, type: f.type })),
@@ -5535,54 +5383,6 @@ window.dismissRetrySection = function() {
 
 })();
 
-
-</script>
-
-<!-- Offline mode browser restriction — web browsers only, never apps -->
-<script>
-(function() {
-  function isAppEnv() {
-    return !!(window.electronAPI || window.BeamNative || window.__BEAM_NATIVE_ANDROID__);
-  }
-
-  function restrict() {
-    var card = document.getElementById('mode-offline');
-    if (card) { card.classList.add('unavailable'); card.setAttribute('aria-disabled', 'true'); }
-    var tag  = document.getElementById('offline-app-tag');
-    if (tag)  tag.style.display = 'inline-flex';
-    var warn = document.getElementById('hiw-offline-browser-warning');
-    if (warn) warn.style.display = 'block';
-  }
-
-  function unrestrict() {
-    // Remove restriction if it was applied before BeamNative was ready
-    var card = document.getElementById('mode-offline');
-    if (card) { card.classList.remove('unavailable'); card.removeAttribute('aria-disabled'); }
-    var tag  = document.getElementById('offline-app-tag');
-    if (tag)  tag.style.display = 'none';
-    var warn = document.getElementById('hiw-offline-browser-warning');
-    if (warn) warn.style.display = 'none';
-  }
-
-  // Watch mode-selector so restriction re-applies when files are queued
-  var ms = document.getElementById('mode-selector');
-  if (ms) new MutationObserver(function() { if (!isAppEnv()) restrict(); })
-            .observe(ms, { attributes: true, attributeFilter: ['style'] });
-
-  // Retry every 300ms for 5s
-  // If app env detected at any point — remove restriction and stop
-  // If never detected — apply restriction
-  var n = 0;
-  var iv = setInterval(function() {
-    if (isAppEnv()) {
-      unrestrict();      // ← KEY FIX: remove any restriction already applied
-      clearInterval(iv);
-      return;
-    }
-    restrict();
-    if (++n >= 17) clearInterval(iv); // ~5s
-  }, 300);
-})();
 </script>
 </body>
 </html>
