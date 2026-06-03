@@ -341,11 +341,6 @@
     .cfi-meta { font-size: .72rem; color: var(--muted); margin-top: 2px; }
     .cfi-download { display: flex; align-items: center; gap: 5px; padding: 6px 12px; background: var(--success); color: #fff; border-radius: 7px; text-decoration: none; font-size: .78rem; font-weight: 700; flex-shrink: 0; transition: opacity .15s, transform .1s; }
     .cfi-download:hover { opacity: .88; transform: translateY(-1px); }
-    .cfi-discard { display: flex; align-items: center; padding: 6px 10px; background: none; border: 1px solid rgba(239,68,68,.25); color: var(--error); border-radius: 7px; font-size: .75rem; font-weight: 700; cursor: pointer; flex-shrink: 0; transition: all .15s; }
-    .cfi-discard:hover { background: rgba(239,68,68,.1); border-color: rgba(239,68,68,.5); }
-    #recv-clear-all-wrap { margin-top: 10px; display: none; }
-    #recv-clear-all-btn { width: 100%; padding: 10px; border-radius: var(--radius-sm); border: 1px solid rgba(239,68,68,.25); background: rgba(239,68,68,.06); color: var(--error); font-size: .84rem; font-weight: 700; cursor: pointer; transition: all .15s; }
-    #recv-clear-all-btn:hover { background: rgba(239,68,68,.14); border-color: rgba(239,68,68,.5); }
 
     /* ── Save All button (post-transfer) ── */
     #save-all-wrap { display: none; margin-top: 10px; }
@@ -1063,12 +1058,6 @@
               Make sure the <strong>Beam desktop app</strong> is open on a Mac, Windows, or Linux device on the same WiFi network, then try again.
             </div>
             <button class="offline-retry-scan-btn" onclick="resetOfflineMode()">🔄 Try again</button>
-            <!-- Scan QR code from desktop app (Android only) -->
-            <div id="offline-scan-qr-btn-wrap" style="display:none;margin-top:12px;">
-              <button class="offline-retry-scan-btn" style="background:rgba(99,102,241,.1);border-color:rgba(99,102,241,.3);color:var(--accent-2);" onclick="beamScanQr()">
-                📷 Scan QR from desktop app
-              </button>
-            </div>
             <!-- Manual IP fallback -->
             <div class="offline-manual-ip-wrap">
               <div class="offline-manual-ip-label">Or enter the desktop app IP manually:</div>
@@ -1330,11 +1319,6 @@
       <!-- Save All (post-transfer, shown when >1 file received) -->
       <div id="save-all-wrap">
         <button id="save-all-btn">💾 Save All to Device</button>
-      </div>
-
-      <!-- Clear All — removes all received files from RAM/UI -->
-      <div id="recv-clear-all-wrap">
-        <button id="recv-clear-all-btn">🗑 Clear all received files</button>
       </div>
 
       <!-- Current incoming file card -->
@@ -2171,8 +2155,7 @@ function addCompletedFileCard(meta, blob, skipped = false) {
 
   if (!skipped && blob) {
     const objUrl = URL.createObjectURL(blob);
-    const blobEntry = { name: meta.name, blob, objUrl };
-    receivedBlobLinks.push(blobEntry);
+    receivedBlobLinks.push({ name: meta.name, blob });
 
     const dl = document.createElement('a');
     dl.className = 'cfi-download';
@@ -2180,29 +2163,6 @@ function addCompletedFileCard(meta, blob, skipped = false) {
     dl.download = meta.name;
     dl.innerHTML = '⬇ Download';
     item.appendChild(dl);
-
-    // Discard button — revokes blob URL, frees RAM, removes card
-    const discard = document.createElement('button');
-    discard.className = 'cfi-discard';
-    discard.title = 'Remove from memory — frees RAM';
-    discard.innerHTML = '✕';
-    discard.onclick = () => {
-      URL.revokeObjectURL(objUrl);
-      blobEntry.revoked = true;
-      // Remove from receivedBlobLinks
-      const idx = receivedBlobLinks.indexOf(blobEntry);
-      if (idx !== -1) receivedBlobLinks.splice(idx, 1);
-      // Remove the card with fade
-      item.style.transition = 'opacity .25s, transform .25s';
-      item.style.opacity = '0';
-      item.style.transform = 'translateX(20px)';
-      setTimeout(() => {
-        item.remove();
-        updateRecvClearAllVisibility();
-      }, 250);
-    };
-    item.appendChild(discard);
-
   } else if (skipped) {
     const tag = document.createElement('span');
     tag.style.cssText = 'font-size:.72rem;color:var(--muted);font-weight:600;';
@@ -2211,18 +2171,6 @@ function addCompletedFileCard(meta, blob, skipped = false) {
   }
 
   completedFiles.appendChild(item);
-  updateRecvClearAllVisibility();
-}
-
-function updateRecvClearAllVisibility() {
-  const wrap = document.getElementById('recv-clear-all-wrap');
-  if (!wrap) return;
-  // Show "Clear All" only when there are received (non-skipped) file cards
-  const hasFiles = receivedBlobLinks.length > 0;
-  wrap.style.display = hasFiles ? 'block' : 'none';
-  // Hide Save All if no files left
-  if (saveAllWrap) saveAllWrap.style.display =
-    receivedBlobLinks.length > 1 ? 'block' : 'none';
 }
 
 // ── Save All ──────────────────────────────────────────────────────────────────
@@ -2239,34 +2187,6 @@ saveAllBtn.addEventListener('click', () => {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }, i * 400); // stagger to avoid browser blocking
   });
-});
-
-// ── Clear All received files ──────────────────────────────────────────────────
-// Revokes all blob URLs (frees RAM), clears the completed files UI,
-// hides Save All and Clear All buttons. Receiver is ready for next transfer.
-
-document.getElementById('recv-clear-all-btn')?.addEventListener('click', () => {
-  // Revoke all blob URLs to free browser RAM
-  receivedBlobLinks.forEach(({ objUrl }) => {
-    if (objUrl) URL.revokeObjectURL(objUrl);
-  });
-  receivedBlobLinks = [];
-
-  // Clear all file cards with a fade
-  const cards = completedFiles.querySelectorAll('.completed-file-item');
-  cards.forEach((card, i) => {
-    card.style.transition = `opacity .2s ${i * 40}ms, transform .2s ${i * 40}ms`;
-    card.style.opacity    = '0';
-    card.style.transform  = 'translateY(-6px)';
-  });
-  setTimeout(() => {
-    completedFiles.innerHTML = '';
-    saveAllWrap.style.display = 'none';
-    document.getElementById('recv-clear-all-wrap').style.display = 'none';
-    // Reset status
-    setStatus(recvStatus, '🗑 All files cleared — ready for next transfer.', 'info');
-    setTimeout(() => setStatus(recvStatus, '', 'info'), 3000);
-  }, cards.length * 40 + 220);
 });
 
 // ── Sender: file queue management ─────────────────────────────────────────────
@@ -4130,30 +4050,6 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     offlineSection.style.display = 'block';
     const ss = document.getElementById('send-status');
     if (ss) ss.textContent = '';
-
-    // Show Android's own QR code immediately when offline mode opens
-    // so other devices can scan it without waiting for discovery
-    if (IS_ANDROID_NATIVE && window.BeamNative?.isRunningServer?.()) {
-      const serverUrl = window.BeamNative.getLocalServerUrl();
-      if (serverUrl) {
-        const box    = document.getElementById('offline-android-box');
-        const urlEl  = document.getElementById('offline-android-url');
-        const qrWrap = document.getElementById('offline-qr-wrap');
-        if (box && urlEl && qrWrap) {
-          urlEl.textContent = serverUrl;
-          qrWrap.innerHTML  = '';
-          box.style.display = 'block';
-          const tryQR = () => {
-            if (typeof QRCode !== 'undefined') {
-              new QRCode(qrWrap, { text: serverUrl, width: 68, height: 68,
-                colorDark: '#000', colorLight: '#fff', correctLevel: QRCode.CorrectLevel.M });
-            } else { setTimeout(tryQR, 200); }
-          };
-          tryQR();
-        }
-      }
-    }
-
     autoDetectConnection();
   };
 
@@ -4279,41 +4175,28 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
           });
         }
       } else {
-        // No LAN server found
-        if (IS_ANDROID_NATIVE) {
-          // On Android: never show demo mode — show the not-found screen instead
-          document.getElementById('offline-detect-ring').style.display = 'none';
-          showOfflineStep('notfound');
-          document.getElementById('offline-notfound-title').textContent = 'No Beam device found';
-          document.getElementById('offline-notfound-msg').textContent =
-            'Could not connect to a Beam LAN server on this WiFi network.';
-          document.getElementById('offline-notfound-hint').innerHTML =
-            '• Open the <strong>Beam desktop app</strong> on Mac, Windows, or Linux<br>' +
-            '• Make sure it\'s on the <strong>same WiFi</strong> as this phone<br>' +
-            '• Or tap <strong>Scan QR</strong> / enter the IP address below';
-          return;
-        }
+        // No LAN server found — show demo mode notice
         document.getElementById('offline-chosen-mode-line').innerHTML =
-          '<svg class="icon" width="14" height="14"><use href="#ico-wifi"/></svg> Browser demo mode';
+          '<svg class="icon" width="14" height="14"><use href="#ico-wifi"/></svg> Demo mode — no LAN server detected';
         document.getElementById('offline-chosen-why').textContent =
           IS_ELECTRON
             ? 'Starting LAN server… please wait a moment and try again.'
-            : 'No Beam LAN server found. Showing demo mode for browser testing only.';
+            : 'No Beam LAN server found on this network. Download the Beam desktop app to enable real offline transfers. Showing demo mode.';
         document.getElementById('offline-chosen-fallback').textContent =
-          'Install the Beam desktop app to enable real offline transfers.';
+          'Get the desktop app at: beam-app/beam-electron';
       }
       document.getElementById('offline-chosen-result').style.display = 'block';
 
       setTimeout(() => {
         document.getElementById('offline-scanning-title').textContent =
-          ws ? 'Searching for nearby devices on WiFi…' : 'Searching for nearby devices…';
+          ws ? 'Searching for nearby devices on WiFi…' : 'Demo mode — showing simulated devices';
         document.getElementById('offline-scan-note').textContent =
           ws ? 'Make sure the receiver has Beam open on the same network'
              : 'Real devices appear here when the desktop app is running';
         showOfflineStep('scanning');
 
         setTimeout(() => {
-          const deviceList = ws ? peers : (IS_ANDROID_NATIVE ? [] : FAKE_DEVICES);
+          const deviceList = ws ? peers : FAKE_DEVICES;
           renderDeviceList(deviceList);
 
           // Show QR code if Android is running its own server
@@ -4369,9 +4252,8 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     const container = document.getElementById('offline-device-items');
     container.innerHTML = '';
 
-    // Never show fake devices on Android — only on browser for demo purposes
     const list = deviceList.length > 0 ? deviceList
-      : (lanWs || IS_ANDROID_NATIVE ? [] : FAKE_DEVICES.slice(0, 2 + Math.floor(Math.random() * 3)));
+      : (lanWs ? [] : FAKE_DEVICES.slice(0, 2 + Math.floor(Math.random() * 3)));
 
     if (list.length === 0) {
       container.innerHTML = `<div style="text-align:center;padding:20px;color:var(--muted);font-size:.8rem">
@@ -4420,13 +4302,8 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         document.getElementById('offline-fail-detail').textContent =
           `${dev.name} did not accept the transfer in time. Make sure they have the Beam page open and tapped Accept on the incoming popup.`;
       }, 60000);
-    } else if (IS_ANDROID_NATIVE) {
-      // Android with no LAN connection — show error, never simulate
-      showOfflineStep('fail');
-      document.getElementById('offline-fail-detail').textContent =
-        'Not connected to a Beam LAN server. Go back and scan the QR code or enter the IP address of the Beam desktop app.';
     } else {
-      // Browser demo mode only — simulate acceptance after 2.5s
+      // Demo mode: simulate acceptance after 2.5s
       setTimeout(() => startSimulatedTransfer(), 2500);
     }
   }
@@ -4506,98 +4383,6 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   };
 
   // Manual IP connect — user types Mac IP directly
-  // Show the QR scan button only when running in the Android native app
-  if (IS_ANDROID_NATIVE) {
-    const qrBtnWrap = document.getElementById('offline-scan-qr-btn-wrap');
-    if (qrBtnWrap) qrBtnWrap.style.display = 'block';
-  }
-
-  // Triggered when user taps "Scan QR from desktop app"
-  window.beamScanQr = function() {
-    if (IS_ANDROID_NATIVE && window.BeamNative?.scanQrCode) {
-      window.BeamNative.scanQrCode();
-    } else {
-      // Fallback for browser — prompt manual URL
-      const url = prompt('Enter the URL from the QR code (e.g. http://192.168.x.x:7777)');
-      if (url) window.connectFromQrCode(url);
-    }
-  };
-
-  // Called by MainActivity after successful QR scan with the scanned URL
-  window.connectFromQrCode = async function(url) {
-    if (!url || !url.startsWith('http')) {
-      if (typeof showPopup === 'function') {
-        showPopup('❌', 'Invalid QR code', 'This QR code is not a Beam server URL.', 'error', 4000);
-      }
-      return;
-    }
-
-    // Extract IP and port from scanned URL (e.g. http://192.168.1.5:7777)
-    const match = url.match(/^https?:\/\/([^/]+)/);
-    if (!match) return;
-
-    const host = match[1]; // e.g. "192.168.1.5:7777"
-    const ip   = host.split(':')[0];
-
-    // Pre-fill the manual IP field and connect
-    const input = document.getElementById('offline-manual-ip');
-    if (input) input.value = ip;
-
-    // Show connecting feedback
-    showOfflineStep('notfound');
-    document.getElementById('offline-notfound-title').textContent = `Connecting to ${ip}…`;
-    document.getElementById('offline-notfound-msg').textContent   = 'Scanned from QR code — connecting to Beam desktop app';
-
-    // Reuse the manual connect logic
-    const wsUrl = `ws://${host}`;
-    const ws = new WebSocket(wsUrl);
-    const timeout = setTimeout(() => {
-      ws.close();
-      document.getElementById('offline-notfound-title').textContent = 'Could not connect';
-      document.getElementById('offline-notfound-msg').textContent   =
-        `Could not reach Beam at ${host}. Make sure the desktop app is open.`;
-    }, 5000);
-
-    ws.onopen = () => {
-      clearTimeout(timeout);
-      const myIdQr   = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-        const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-      });
-      const myNameQr = IS_ANDROID_NATIVE
-        ? (window.BeamNative?.getDeviceName?.() || 'Android')
-        : (navigator.platform || 'Browser');
-      ws.send(JSON.stringify({ type: 'register', id: myIdQr, name: myNameQr, deviceType: 'phone' }));
-      lanWs = ws;
-      setupLanMessageHandler(ws);
-
-      document.getElementById('offline-detect-ring').style.display = 'none';
-      document.getElementById('offline-chosen-mode-line').innerHTML =
-        `<svg class="icon" width="14" height="14"><use href="#ico-wifi"/></svg> Connected via QR scan to ${ip}`;
-      document.getElementById('offline-chosen-why').textContent =
-        'Scanned Beam desktop app QR code. Files transfer directly over WiFi.';
-      document.getElementById('offline-chosen-fallback').textContent = '';
-      document.getElementById('offline-chosen-result').style.display = 'block';
-      showOfflineStep('conn');
-
-      if (typeof showPopup === 'function') {
-        showPopup('✅', 'Connected!', `Linked to Beam at ${ip}`, 'success', 3000);
-      }
-
-      setTimeout(() => {
-        document.getElementById('offline-scanning-title').textContent = 'Searching for nearby devices…';
-        showOfflineStep('scanning');
-        setTimeout(() => { renderDeviceList(peers); showOfflineStep('devices'); }, 1000);
-      }, 1800);
-    };
-
-    ws.onerror = () => {
-      clearTimeout(timeout);
-      document.getElementById('offline-notfound-title').textContent = 'QR scan failed';
-      document.getElementById('offline-notfound-msg').textContent   =
-        `Could not connect to ${host}. Check the desktop app is running.`;
-    };
-  };
-
   window.connectManualIp = async function() {
     const input = document.getElementById('offline-manual-ip');
     const ip    = (input?.value || '').trim();
@@ -4701,8 +4486,9 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }
     showRecvState('waiting');
 
-    // Wait for real incoming requests — never simulate on Android
-    if (!lanWs && !IS_ANDROID_NATIVE) {
+    // If connected to LAN server, wait for real incoming requests
+    // Otherwise simulate
+    if (!lanWs) {
       setTimeout(() => simulateIncoming(), 4000);
     }
   }
@@ -4777,7 +4563,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     if (pctEl)  pctEl.textContent  = '0%';
     recvBuffer = []; recvMeta = null; recvChunksGot = 0;
     showRecvState('waiting');
-    if (!lanWs && !IS_ANDROID_NATIVE) setTimeout(() => simulateIncoming(), 3500);
+    if (!lanWs) setTimeout(() => simulateIncoming(), 3500);
   };
 
 })();

@@ -21,8 +21,6 @@ import android.widget.LinearLayout
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import com.journeyapps.barcodescanner.ScanContract
-import com.journeyapps.barcodescanner.ScanOptions
 
 class MainActivity : AppCompatActivity() {
 
@@ -44,30 +42,6 @@ class MainActivity : AppCompatActivity() {
                 ?: emptyArray()
         )
         fileChooserCallback = null
-    }
-
-    // ── QR code scanner launcher ─────────────────────────────────────────────
-    private val qrScanLauncher = registerForActivityResult(ScanContract()) { result ->
-        val url = result.contents ?: return@registerForActivityResult
-        // Pass scanned URL to JavaScript — connects to the scanned Beam server
-        runOnUiThread {
-            webView.evaluateJavascript(
-                "window.connectFromQrCode && window.connectFromQrCode('${url.replace("'", "\\'")}');",
-                null
-            )
-        }
-    }
-
-    fun launchQrScanner() {
-        val options = ScanOptions().apply {
-            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-            setPrompt("Scan the QR code shown in the Beam desktop app")
-            setCameraId(0)
-            setBeepEnabled(true)
-            setBarcodeImageEnabled(false)
-            setOrientationLocked(false)
-        }
-        qrScanLauncher.launch(options)
     }
 
     // ── Listen for transfer completion from the Foreground Service ───────────
