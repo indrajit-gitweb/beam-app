@@ -5703,18 +5703,19 @@ function _processDlQueue() {
 
 // ── App Reset ─────────────────────────────────────────────────────────────────
 
-function showResetConfirm() {
+// Assigned to window so onclick= attributes can reach them from module scope
+window.showResetConfirm = function() {
   const el = document.getElementById('reset-confirm');
   if (el) { el.style.display = 'flex'; el.style.visibility = 'visible'; el.style.pointerEvents = 'auto'; }
-}
+};
 
-function hideResetConfirm() {
+window.hideResetConfirm = function() {
   const el = document.getElementById('reset-confirm');
   if (el) { el.style.display = 'none'; el.style.visibility = 'hidden'; el.style.pointerEvents = 'none'; }
-}
+};
 
-function doAppReset() {
-  hideResetConfirm();
+window.doAppReset = function() {
+  window.hideResetConfirm();
 
   // 1. Stop any active offline/blaze transfers
   try { if (typeof window.cancelOfflineTransfer === 'function') window.cancelOfflineTransfer(); } catch(_) {}
