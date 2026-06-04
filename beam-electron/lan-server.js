@@ -380,6 +380,17 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
+  // POST /session-downloaded/:id  — receiver signals all files downloaded
+  if (req.url.startsWith('/session-downloaded/') && (req.method === 'POST' || req.method === 'GET')) {
+    const sessionId = req.url.slice('/session-downloaded/'.length).split('?')[0];
+    browserReceiverSessions.delete(sessionId);
+    const msg = JSON.stringify({ type: 'session-complete', sessionId });
+    browsers.forEach(ws => { try { if (ws.readyState === 1) ws.send(msg); } catch(_) {} });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   // GET /download-for-session/:sessionId/:fileId  — receiver downloads a file
   if (req.method === 'GET' && req.url.startsWith('/download-for-session/')) {
     const parts     = req.url.slice('/download-for-session/'.length).split('?')[0].split('/');
@@ -389,10 +400,11 @@ const httpServer = http.createServer((req, res) => {
     if (!file) { res.writeHead(404); res.end('Not found'); return; }
     sess.files.splice(sess.files.indexOf(file), 1); // remove after delivery
     res.writeHead(200, {
-      'Content-Type':        file.type,
-      'Content-Disposition': `attachment; filename="${encodeURIComponent(file.name)}"`,
-      'Content-Length':      String(file.buffer.length),
-      'Cache-Control':       'no-store',
+      'Content-Type':                    file.type,
+      'Content-Disposition':             `attachment; filename="${encodeURIComponent(file.name)}"`,
+      'Content-Length':                  String(file.buffer.length),
+      'Cache-Control':                   'no-store',
+      'Access-Control-Expose-Headers':   'Content-Length',
     });
     res.end(file.buffer);
     return;

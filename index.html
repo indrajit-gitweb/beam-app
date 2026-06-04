@@ -3926,6 +3926,18 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   }
 
   // ── Select device and start transfer ─────────────────────────────────────
+  // ── Sender callback: receiver finished downloading (session complete) ─────────
+  window.onBrowserSessionComplete = function() {
+    const p = window._pendingBrowserSession;
+    window._pendingBrowserSession = null;
+    showOfflineStep('success');
+    document.getElementById('offline-success-detail').textContent =
+      (p ? p.name : 'Receiver') + ' has downloaded all files successfully.';
+    if (typeof showPopup === 'function')
+      showPopup('✅', 'Transfer complete!',
+        (p ? p.name : 'Receiver') + ' received all files.', 'success', 5000);
+  };
+
   // ── Receiver mode: browser scanned QR, wants to receive from sender ─────────
 
   // Detect a clean device name for the browser receiver
@@ -3989,6 +4001,9 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
               const url  = base + '/download-for-session/' + sessionId + '/' + file.fileId;
               await downloadSessionFile(url, file.name, file.size, senderName || dev.name, i + 1, files.length);
             }
+
+            // Notify sender that download is complete
+            try { await fetch(base + '/session-downloaded/' + sessionId, { method: 'POST' }); } catch(_) {}
 
             showOfflineStep('success');
             document.getElementById('offline-success-detail').textContent =
@@ -4161,18 +4176,17 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       }
     }
 
-    // Don't show "Transfer Complete" yet — receiver still needs to download.
-    // Show a clear "files are ready, receiver is downloading" message instead.
+    // Show "waiting for receiver to download" — transition to success when done
     showOfflineStep('transfer');
     const dirEl2 = document.getElementById('offline-transfer-direction');
-    if (dirEl2) dirEl2.textContent = 'Uploaded for';
+    if (dirEl2) dirEl2.textContent = 'Waiting for';
     document.getElementById('offline-transfer-device').textContent = dev.name;
-    setOfflineProgress(100, 'Files ready — ' + dev.name + ' is downloading…');
+    setOfflineProgress(100, 'Files ready — waiting for ' + dev.name + ' to download…');
     const speedRow = document.getElementById('offline-speed-row');
     if (speedRow) speedRow.style.display = 'none';
-    if (typeof showPopup === 'function')
-      showPopup('📤', 'Files uploaded!',
-        dev.name + ' is now downloading. You can close this screen.', 'info', 6000);
+
+    // onBrowserSessionComplete fires when receiver finishes (via broadcast or WebSocket)
+    window._pendingBrowserSession = { name: dev.name, sessionId: dev.sessionId };
   }
 
   // ── Browser-side transfer (fetch-based) ───────────────────────────────────
@@ -4641,6 +4655,8 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
           window.onNativeTransferComplete(msg.filename, msg.savedPath || '', msg.fromName || '');
         } else if (msg.type === 'device-found') {
           addDevice({ ip: msg.ip, name: msg.name, platform: msg.platform || 'unknown', port: msg.port || LAN_PORT });
+        } else if (msg.type === 'session-complete') {
+          window.onBrowserSessionComplete && window.onBrowserSessionComplete();
         } else if (msg.type === 'transfer-cancelled') {
           window.onNativeTransferCancelled();
         } else if (msg.type === 'transfer-progress' || msg.type === 'progress') {
@@ -4706,7 +4722,6 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // ── Reset ──────────────────────────────────────────────────────────────────
   window.resetOfflineMode = function() {
     if (transferTimer)  { clearTimeout(transferTimer);   transferTimer  = null; }
-    // Hide hotspot tips + Blaze button so they re-evaluate on next scan
     ['offline-hotspot-tip-scan','offline-hotspot-tip-nf'].forEach(id => {
       const el = document.getElementById(id); if (el) el.style.display = 'none';
     });
@@ -4722,13 +4737,33 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }
     selectedDev         = null;
     pendingSessionId    = null;
-    window._offlinePendingSessionId = null;
+    window._offlinePendingSessionId  = null;
+    window._beamReceiverMode         = false;
+    window._beamQRConnectIP          = null;
+    window._pendingBrowserSession    = null;
     const qrBox = document.getElementById('offline-android-box');
     if (qrBox) { delete qrBox.dataset.qrRendered; qrBox.style.display = 'none'; }
     setOfflineProgress(0, 'Sending…');
+    // Restore waiting-step text to sender defaults for next use
+    const wt = document.getElementById('offline-waiting-title');
+    if (wt) wt.innerHTML = 'Waiting for <span id="offline-waiting-device">the receiver</span>…';
+    const ws2 = document.getElementById('offline-waiting-sub');
+    if (ws2) ws2.textContent = 'The receiver needs to accept the transfer on their device';
+    const dirEl = document.getElementById('offline-transfer-direction');
+    if (dirEl) dirEl.textContent = 'Sending to';
     const counterEl = document.getElementById('offline-file-counter');
     if (counterEl) counterEl.style.display = 'none';
-    autoDetectConnection();
+
+    // If we already have devices, go back to device list — don't rescan
+    if (devices && devices.length > 0) {
+      renderDeviceList();
+      showOfflineStep('devices');
+      showOfflineQR();
+      startPendingPoll();
+      startBrowserReceiverPoll();
+    } else {
+      autoDetectConnection();
+    }
   };
 
   window.retryOfflineTransfer = function() {

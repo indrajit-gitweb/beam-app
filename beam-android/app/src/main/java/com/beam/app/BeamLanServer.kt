@@ -138,6 +138,16 @@ class BeamLanServer(
         if (uri.startsWith("/files-for-session/") && method == Method.GET)
             return cors(handleFilesForSession(uri.removePrefix("/files-for-session/").split("?")[0]))
 
+        // Receiver notifies sender all files downloaded — sender can show success
+        if (uri.startsWith("/session-downloaded/") && (method == Method.POST || method == Method.GET)) {
+            val sessionId = uri.removePrefix("/session-downloaded/").split("?")[0]
+            browserSessions.remove(sessionId)
+            context.sendBroadcast(Intent("com.beam.app.SESSION_DOWNLOADED").apply {
+                putExtra("sessionId", sessionId)
+            })
+            return cors(newFixedLengthResponse(Response.Status.OK, "application/json", """{"ok":true}"""))
+        }
+
         if (uri.startsWith("/download-for-session/") && method == Method.GET) {
             val parts = uri.removePrefix("/download-for-session/").split("/")
             return if (parts.size >= 2) cors(handleDownloadForSession(parts[0], parts[1]))
@@ -530,6 +540,8 @@ class BeamLanServer(
             java.io.FileInputStream(file.tempFile), file.size)
         res.addHeader("Content-Disposition", "attachment; filename=\"${encode(file.name)}\"")
         res.addHeader("Cache-Control", "no-store")
+        // Expose Content-Length so browser can calculate download progress
+        res.addHeader("Access-Control-Expose-Headers", "Content-Length")
         mainHandler.postDelayed({ file.tempFile.delete() }, 5000)
         return res
     }
