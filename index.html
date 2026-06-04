@@ -569,9 +569,19 @@
     .qr-recv-col .how-step:not(:last-child)::before  { background: #a855f7; }
     .offline-privacy-strip { margin-top: 14px; padding: 14px 18px; background: rgba(16,185,129,.05); border: 1px solid rgba(16,185,129,.15); border-radius: var(--radius-sm); display: flex; align-items: center; gap: 12px; }
     /* Offline HIW bounce animations */
-    #hiw-offline.active .how-col:nth-child(1) { animation: bounce-from-left  0.65s 0.05s cubic-bezier(0.34,1.56,0.64,1) both; }
-    #hiw-offline.active .how-col:nth-child(2) { animation: bounce-from-right 0.65s 0.15s cubic-bezier(0.34,1.56,0.64,1) both; }
+    #hiw-offline.active .how-col:nth-child(1) { animation: bounce-from-left   0.65s 0.05s cubic-bezier(0.34,1.56,0.64,1) both; }
+    #hiw-offline.active .how-col:nth-child(2) { animation: bounce-from-right  0.65s 0.15s cubic-bezier(0.34,1.56,0.64,1) both; }
     #hiw-offline.active .offline-privacy-strip { animation: bounce-from-bottom 0.60s 0.32s cubic-bezier(0.34,1.56,0.64,1) both; }
+    /* Beam Blaze tab — same animation pattern as Cloud/Offline */
+    #hiw-blaze.active .hiw-req-row           { animation: bounce-from-bottom 0.45s 0.00s cubic-bezier(0.34,1.56,0.64,1) both; }
+    #hiw-blaze.active .how-col:nth-child(1)  { animation: bounce-from-left   0.65s 0.08s cubic-bezier(0.34,1.56,0.64,1) both; }
+    #hiw-blaze.active .how-col:nth-child(2)  { animation: bounce-from-right  0.65s 0.18s cubic-bezier(0.34,1.56,0.64,1) both; }
+    #hiw-blaze.active .offline-privacy-strip { animation: bounce-from-bottom 0.60s 0.35s cubic-bezier(0.34,1.56,0.64,1) both; }
+    /* QR tab — same animation pattern */
+    #hiw-qr.active .hiw-req-row             { animation: bounce-from-bottom 0.45s 0.00s cubic-bezier(0.34,1.56,0.64,1) both; }
+    #hiw-qr.active .how-col:nth-child(1)    { animation: bounce-from-left   0.65s 0.08s cubic-bezier(0.34,1.56,0.64,1) both; }
+    #hiw-qr.active .how-col:nth-child(2)    { animation: bounce-from-right  0.65s 0.18s cubic-bezier(0.34,1.56,0.64,1) both; }
+    #hiw-qr.active .offline-privacy-strip   { animation: bounce-from-bottom 0.60s 0.35s cubic-bezier(0.34,1.56,0.64,1) both; }
 
     /* ── LAN connected banner (browser/Android) ── */
     #lan-connected-banner {
