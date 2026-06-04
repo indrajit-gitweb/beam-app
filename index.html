@@ -1254,8 +1254,8 @@
         <div id="offline-step-waiting" style="display:none">
           <div class="offline-waiting-wrap">
             <div class="offline-waiting-ring"></div>
-            <div class="offline-waiting-title">Waiting for <span id="offline-waiting-device">the receiver</span>…</div>
-            <div class="offline-waiting-sub">The receiver needs to accept the transfer on their device</div>
+            <div class="offline-waiting-title" id="offline-waiting-title">Waiting for <span id="offline-waiting-device">the receiver</span>…</div>
+            <div class="offline-waiting-sub" id="offline-waiting-sub">The receiver needs to accept the transfer on their device</div>
             <button class="offline-cancel-btn" onclick="resetOfflineMode()">Cancel</button>
           </div>
         </div>
@@ -1264,7 +1264,7 @@
         <div id="offline-step-transfer" style="display:none">
           <div class="offline-progress-wrap">
             <div class="offline-progress-target">
-              Sending to <strong id="offline-transfer-device">—</strong>
+              <span id="offline-transfer-direction">Sending to</span> <strong id="offline-transfer-device">—</strong>
               <span class="transfer-method-badge" id="transfer-method-badge" style="display:none"></span>
             </div>
             <!-- Per-file indicator (shown when sending multiple files) -->
@@ -3928,15 +3928,30 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // ── Select device and start transfer ─────────────────────────────────────
   // ── Receiver mode: browser scanned QR, wants to receive from sender ─────────
 
+  // Detect a clean device name for the browser receiver
+  function getBrowserDeviceName() {
+    if (window.BeamNative?.getDeviceName) return window.BeamNative.getDeviceName();
+    const ua = navigator.userAgent || '';
+    if (/android/i.test(ua))       return 'Android Browser';
+    if (/iphone/i.test(ua))        return 'iPhone Browser';
+    if (/ipad/i.test(ua))          return 'iPad Browser';
+    if (/windows/i.test(ua))       return 'Windows Browser';
+    if (/macintosh|mac os/i.test(ua)) return 'Mac Browser';
+    return 'Browser';
+  }
+
   async function startReceiveFromSender(dev) {
     showOfflineStep('waiting');
     document.getElementById('offline-waiting-device').textContent = dev.name;
-    const waitSub = document.getElementById('offline-waiting-sub');
+    const waitTitle = document.getElementById('offline-waiting-title');
+    const waitSub   = document.getElementById('offline-waiting-sub');
+    if (waitTitle) waitTitle.innerHTML =
+      'Connecting to <span id="offline-waiting-device-inner">' + dev.name + '</span>…';
     if (waitSub) waitSub.textContent =
-      'Registering with ' + dev.name + '… they will see you and can send files.';
+      'Registering with ' + dev.name + ' — they will see you and can tap to send files.';
 
     const base   = 'http://' + dev.ip + ':' + LAN_PORT;
-    const myName = (window.BeamNative?.getDeviceName?.()) || navigator.platform || 'Browser';
+    const myName = getBrowserDeviceName();
 
     try {
       const r = await fetch(base + '/receiver-ready', {
@@ -3946,10 +3961,13 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       if (!r.ok) throw new Error('Server error ' + r.status);
       const { sessionId, senderName } = await r.json();
       window._receiverSessionId = sessionId;
+      const sender = senderName || dev.name;
 
-      // Update waiting message
+      // Update waiting message — correct context: receiver waiting for sender
+      if (waitTitle) waitTitle.innerHTML =
+        'Waiting for <strong>' + sender + '</strong> to send files…';
       if (waitSub) waitSub.textContent =
-        senderName + ' will see you in their device list — ask them to tap your name to send files.';
+        sender + ' can see you in their device list. Ask them to tap your name to send.';
 
       // Poll sender for files
       let sessionPoll = setInterval(async () => {
@@ -3959,7 +3977,10 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
           if (files && files.length > 0) {
             clearInterval(sessionPoll);
             showOfflineStep('transfer');
-            document.getElementById('offline-transfer-device').textContent = senderName || dev.name;
+            // Fix direction label: receiver shows "Receiving from" not "Sending to"
+            const dirEl = document.getElementById('offline-transfer-direction');
+            if (dirEl) dirEl.textContent = 'Receiving from';
+            document.getElementById('offline-transfer-device').textContent = sender;
             setOfflineProgress(0, 'Receiving…');
             _speedWindow = []; _xferLastBytes = 0;
 
@@ -3972,7 +3993,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
             showOfflineStep('success');
             document.getElementById('offline-success-detail').textContent =
               'Received ' + files.length + ' file' + (files.length > 1 ? 's' : '') +
-              ' from ' + (senderName || dev.name) + '.';
+              ' from ' + sender + '. Files saved to Downloads.';
             if (typeof showPopup === 'function')
               showPopup('✅', 'Files received!',
                 files.length + ' file(s) saved to Downloads.', 'success', 5000);
@@ -4023,11 +4044,14 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // Called when Android server broadcasts ACTION_RECEIVER_READY,
   // OR when Mac server sends WebSocket {type:'receiver-ready'}
   window.onBrowserReceiverReady = function(sessionId, receiverName) {
-    // Add the browser receiver as a virtual device in the device list
+    // Show clean name — strip platform noise like "Linux armv81"
+    // receiverName already comes from getBrowserDeviceName() so it's clean
+    // Just append "(browser)" to make clear it's a web receiver
+    const cleanName = receiverName.replace(/\s*\(browser\)\s*$/i, '');
     const browserDev = {
       ip:        null,
       sessionId: sessionId,
-      name:      receiverName + ' (browser)',
+      name:      cleanName + ' (browser)',
       platform:  'browser',
       port:      LAN_PORT,
       isBrowserReceiver: true
@@ -4137,12 +4161,18 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       }
     }
 
-    showOfflineStep('success');
-    document.getElementById('offline-success-detail').textContent =
-      'Files ready — ' + dev.name + ' is downloading them now.';
+    // Don't show "Transfer Complete" yet — receiver still needs to download.
+    // Show a clear "files are ready, receiver is downloading" message instead.
+    showOfflineStep('transfer');
+    const dirEl2 = document.getElementById('offline-transfer-direction');
+    if (dirEl2) dirEl2.textContent = 'Uploaded for';
+    document.getElementById('offline-transfer-device').textContent = dev.name;
+    setOfflineProgress(100, 'Files ready — ' + dev.name + ' is downloading…');
+    const speedRow = document.getElementById('offline-speed-row');
+    if (speedRow) speedRow.style.display = 'none';
     if (typeof showPopup === 'function')
-      showPopup('✅', 'Files sent!',
-        dev.name + ' will receive them automatically.', 'success', 5000);
+      showPopup('📤', 'Files uploaded!',
+        dev.name + ' is now downloading. You can close this screen.', 'info', 6000);
   }
 
   // ── Browser-side transfer (fetch-based) ───────────────────────────────────
