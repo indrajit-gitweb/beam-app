@@ -5703,7 +5703,9 @@ function _processDlQueue() {
 
 // ── App Reset ─────────────────────────────────────────────────────────────────
 
-// Assigned to window so onclick= attributes can reach them from module scope
+// Guard flag — only show the reset popup when user explicitly confirmed
+let _resetUserInitiated = false;
+
 window.showResetConfirm = function() {
   const el = document.getElementById('reset-confirm');
   if (el) { el.style.display = 'flex'; el.style.visibility = 'visible'; el.style.pointerEvents = 'auto'; }
@@ -5716,43 +5718,61 @@ window.hideResetConfirm = function() {
 
 window.doAppReset = function() {
   window.hideResetConfirm();
+  _resetUserInitiated = true;
 
-  // 1. Stop any active offline/blaze transfers
-  try { if (typeof window.cancelOfflineTransfer === 'function') window.cancelOfflineTransfer(); } catch(_) {}
-  try { if (typeof window.cancelIncomingTransfer === 'function') window.cancelIncomingTransfer(); } catch(_) {}
-  try { if (window.BeamNative?.cancelTransfer)  window.BeamNative.cancelTransfer();  } catch(_) {}
-  try { if (window.BeamNative?.stopBeamBlaze)   window.BeamNative.stopBeamBlaze();   } catch(_) {}
+  // ── Stop active transfers ─────────────────────────────────────────────────
+  if (window._sessionDownloadAbort) {
+    try { window._sessionDownloadAbort.abort(); } catch(_) {}
+    window._sessionDownloadAbort = null;
+  }
+  try { if (window.BeamNative?.cancelTransfer)       window.BeamNative.cancelTransfer();       } catch(_) {}
+  try { if (window.BeamNative?.stopBeamBlaze)        window.BeamNative.stopBeamBlaze();        } catch(_) {}
   try { if (window.BeamNative?.stopBlazeAdvertising) window.BeamNative.stopBlazeAdvertising(); } catch(_) {}
 
-  // 2. Reset the send-side state (clears files, destroys peer, resets UI)
-  try { if (typeof clearQueue === 'function') clearQueue(); } catch(_) {}
-  try { if (typeof resetSenderToIdle === 'function') resetSenderToIdle(); } catch(_) {}
+  // ── Clear file queue ──────────────────────────────────────────────────────
+  filesToSend = [];
+  try { resetSenderToIdle(); } catch(_) {}
 
-  // 3. Reset offline mode
-  try { if (typeof window.resetOfflineMode === 'function') window.resetOfflineMode(); } catch(_) {}
+  // ── Stop offline polls / timers without triggering a new scan ────────────
+  try { if (typeof window._stopOfflinePoll === 'function') window._stopOfflinePoll(); } catch(_) {}
+  try { _stopClearCountdown(); } catch(_) {}
+  _lastSentFiles = [];
 
-  // 4. Switch back to P2P tab and Send panel
-  try { if (typeof selectMode === 'function') selectMode('p2p'); } catch(_) {}
-  try { if (typeof window.switchTab === 'function') window.switchTab('send'); } catch(_) {}
+  // ── Switch to P2P + Send tab ──────────────────────────────────────────────
+  try { selectMode('p2p'); }   catch(_) {}
+  try { window.switchTab('send'); } catch(_) {}
 
-  // 5. Clear global session state
-  window._beamQRConnectIP          = null;
-  window._beamReceiverMode         = false;
-  window._receiverSessionId        = null;
-  window._beamQRSenderBase         = null;
-  window._pendingBrowserSession     = null;
-  window._offlinePendingSessionId  = null;
-  window._currentTransferSessionId = null;
-  window._currentTransferReceiverIp = null;
-  if (window._sessionDownloadAbort) { try { window._sessionDownloadAbort.abort(); } catch(_) {} window._sessionDownloadAbort = null; }
+  // ── Hide offline section completely ──────────────────────────────────────
+  const offSec = document.getElementById('offline-section');
+  if (offSec) offSec.style.display = 'none';
 
-  // 6. Close any overlays
+  // ── Close all overlays ────────────────────────────────────────────────────
   document.getElementById('lan-incoming-overlay')?.classList.remove('show');
-  document.getElementById('blaze-incoming-overlay')?.style && (document.getElementById('blaze-incoming-overlay').style.display = 'none');
+  const blazeOv = document.getElementById('blaze-incoming-overlay');
+  if (blazeOv) { blazeOv.style.display = 'none'; blazeOv.style.visibility = 'hidden'; }
+  const rcOv = document.getElementById('reset-confirm');
+  if (rcOv) { rcOv.style.display = 'none'; rcOv.style.visibility = 'hidden'; }
 
-  if (typeof showPopup === 'function')
-    showPopup('🔄', 'App reset', 'Everything cleared. Ready to start fresh.', 'success', 3000);
-}
+  // ── Clear all session state ───────────────────────────────────────────────
+  window._beamQRConnectIP           = null;
+  window._beamReceiverMode          = false;
+  window._receiverSessionId         = null;
+  window._beamQRSenderBase          = null;
+  window._pendingBrowserSession     = null;
+  window._offlinePendingSessionId   = null;
+  window._currentTransferSessionId  = null;
+  window._currentTransferReceiverIp = null;
+
+  // ── Scroll to top ─────────────────────────────────────────────────────────
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  // ── Success popup (only when user-initiated) ──────────────────────────────
+  if (_resetUserInitiated) {
+    _resetUserInitiated = false;
+    if (typeof showPopup === 'function')
+      showPopup('🔄', 'App reset', 'Everything cleared. Ready to start fresh.', 'success', 3000);
+  }
+};
 
 // ── QR Connect startup handler ────────────────────────────────────────────────
 // When the receiver scans the sender's QR code, the URL contains ?connect=ip.
