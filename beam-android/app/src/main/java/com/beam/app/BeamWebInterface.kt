@@ -104,13 +104,19 @@ class BeamWebInterface(private val context: Context) {
     /** Cancel a receiver-side upload in progress (marks session cancelled → upload stops) */
     @JavascriptInterface
     fun cancelIncomingTransfer(sessionId: String) {
-        beamLanServer?.cancelSession(sessionId)
+        beamLanServer?.cancelUploadSession(sessionId)
     }
 
     /** Cancel the currently running sender-side upload */
     @JavascriptInterface
     fun cancelTransfer() {
         BeamTransferService.cancelCurrent()
+    }
+
+    /** Cancel a QR browser session download (stops ProgressInputStream mid-stream) */
+    @JavascriptInterface
+    fun cancelSessionTransfer(sessionId: String) {
+        beamLanServer?.cancelSession(sessionId)
     }
 
     // ── Notifications ──────────────────────────────────────────────────────────

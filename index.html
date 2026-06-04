@@ -701,6 +701,8 @@
     /* Device list */
     .offline-device-list { margin-top: 8px; }
     .offline-device-list-title { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin-bottom: 8px; }
+    .offline-rescan-btn { font-size: .68rem; padding: 3px 9px; border-radius: 5px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s; }
+    .offline-rescan-btn:hover { color: #34d399; border-color: #34d399; }
     .offline-device-item {
       display: flex; align-items: center; gap: 10px;
       padding: 10px 12px; border: 1px solid var(--border);
@@ -1243,7 +1245,10 @@
         <!-- Step 3: device list -->
         <div id="offline-step-devices" style="display:none">
           <div class="offline-device-list">
-            <div class="offline-device-list-title">Nearby devices</div>
+            <div class="offline-device-list-title" style="display:flex;align-items:center;justify-content:space-between">
+              <span>Nearby devices</span>
+              <button class="offline-rescan-btn" onclick="triggerRescan()">↺ Scan again</button>
+            </div>
             <div id="offline-device-items"></div>
 
             <!-- QR shown in the persistent #offline-android-box at bottom -->
@@ -3992,7 +3997,8 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       });
       if (!r.ok) throw new Error('Server error ' + r.status);
       const { sessionId, senderName } = await r.json();
-      window._receiverSessionId = sessionId;
+      window._receiverSessionId  = sessionId;
+      window._beamQRSenderBase   = base;  // store for cancel
       const sender = senderName || dev.name;
 
       // Update waiting message — correct context: receiver waiting for sender
@@ -4076,21 +4082,36 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   }
 
   async function downloadSessionFile(url, filename, totalSize, fromName, fileIdx, totalFiles) {
-    const resp = await fetch(url);
+    window._sessionDownloadAbort = new AbortController();
+    let resp;
+    try {
+      resp = await fetch(url, { signal: window._sessionDownloadAbort.signal });
+    } catch(e) {
+      if (e.name === 'AbortError') return; // cancelled cleanly
+      throw e;
+    }
     if (!resp.ok) return;
     const contentLen = parseInt(resp.headers.get('content-length') || '0', 10) || totalSize || 0;
     const reader = resp.body.getReader();
     const chunks = [];
     let received = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      window.onNativeTransferProgress(
-        contentLen > 0 ? Math.round(received * 100 / contentLen) : 0,
-        filename, received, contentLen
-      );
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        window.onNativeTransferProgress(
+          contentLen > 0 ? Math.round(received * 100 / contentLen) : 0,
+          filename, received, contentLen
+        );
+      }
+    } catch(e) {
+      reader.cancel();
+      if (e.name === 'AbortError') return; // cancelled cleanly
+      throw e;
+    } finally {
+      window._sessionDownloadAbort = null;
     }
     const blob   = new Blob(chunks);
     const blobUrl = URL.createObjectURL(blob);
@@ -4650,19 +4671,32 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     const receiverIp = window._currentTransferReceiverIp;
     const sessionId  = window._currentTransferSessionId;
 
+    // ── QR browser session cancel (sender side) ───────────────────────────
+    const bSession = window._pendingBrowserSession;
+    if (bSession) {
+      window._pendingBrowserSession = null;
+      if (isAndroid() && window.BeamNative?.cancelSessionTransfer) {
+        window.BeamNative.cancelSessionTransfer(bSession.sessionId);
+      } else {
+        // Mac/browser sender: POST /cancel-session to own server
+        const ownBase = IS_ELECTRON || !window.location.hostname
+          ? 'http://localhost:' + LAN_PORT
+          : 'http://' + window.location.hostname + ':' + LAN_PORT;
+        fetch(ownBase + '/cancel-session/' + bSession.sessionId, { method: 'POST' }).catch(() => {});
+      }
+      _resetProgressUI();
+      document.getElementById('offline-fail-detail').textContent = 'Transfer cancelled.';
+      showOfflineStep('fail');
+      return;
+    }
+
+    // ── Normal offline transfer cancel ───────────────────────────────────
     if (isAndroid() && window.BeamNative) {
-      // Native service handles the cancel + notifies receiver
       window.BeamNative.cancelTransfer();
     } else {
-      // Browser: abort the in-flight XHR
-      if (window._currentXhr) {
-        window._currentXhr.abort();
-        window._currentXhr = null;
-      }
-      // Also tell the receiver's server to cancel
+      if (window._currentXhr) { window._currentXhr.abort(); window._currentXhr = null; }
       if (receiverIp && sessionId) {
-        fetch('http://' + receiverIp + ':' + LAN_PORT + '/cancel/' + sessionId)
-          .catch(() => {});
+        fetch('http://' + receiverIp + ':' + LAN_PORT + '/cancel/' + sessionId).catch(() => {});
       }
     }
 
@@ -4675,10 +4709,29 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 
   // ── Receiver cancel (mid-transfer) ─────────────────────────────────────────
   window.cancelIncomingTransfer = function() {
-    const sessionId = window._offlinePendingSessionId;
+    // ── QR session receiver cancel ────────────────────────────────────────
+    const qrSession = window._receiverSessionId;
+    if (qrSession) {
+      // 1. Abort the in-flight fetch
+      if (window._sessionDownloadAbort) {
+        window._sessionDownloadAbort.abort();
+        window._sessionDownloadAbort = null;
+      }
+      // 2. Tell sender's server to cancel (stops ProgressInputStream)
+      const senderBase = window._beamQRSenderBase || '';
+      if (senderBase) {
+        fetch(senderBase + '/cancel-session/' + qrSession, { method: 'POST' }).catch(() => {});
+      }
+      window._receiverSessionId = null;
+      _resetProgressUI();
+      showOfflineStep('fail');
+      document.getElementById('offline-fail-detail').textContent = 'Transfer cancelled.';
+      return;
+    }
 
+    // ── Normal offline incoming transfer cancel ───────────────────────────
+    const sessionId = window._offlinePendingSessionId;
     if (isAndroid() && window.BeamNative) {
-      // declineIncoming marks the session cancelled — handleUpload stops streaming
       window.BeamNative.declineIncoming(sessionId || '');
     } else {
       const baseUrl = IS_ELECTRON
@@ -4839,6 +4892,14 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   window.retryOfflineTransfer = function() {
     if (selectedDev) selectOfflineDevice(selectedDev);
     else resetOfflineMode();
+  };
+
+  // Rescan button — clears device list and runs a fresh subnet scan
+  window.triggerRescan = function() {
+    devices = [];
+    seenReceivers.clear();
+    _stopOfflinePoll();
+    autoDetectConnection();
   };
 
   // ── Receive section (Receive tab) ─────────────────────────────────────────

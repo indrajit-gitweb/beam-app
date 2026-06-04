@@ -76,6 +76,8 @@ class BeamLanServer(
     data class NativeFile(val fileId: String, val name: String, val size: Long,
                           val type: String, val uri: android.net.Uri)
     private val nativeFileSessions = ConcurrentHashMap<String, MutableList<NativeFile>>()
+    // Sessions cancelled mid-stream (sender or receiver tapped Cancel)
+    private val cancelledDownloads = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     private val sessions    = ConcurrentHashMap<String, TransferSession>()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -143,6 +145,15 @@ class BeamLanServer(
 
         if (uri.startsWith("/files-for-session/") && method == Method.GET)
             return cors(handleFilesForSession(uri.removePrefix("/files-for-session/").split("?")[0]))
+
+        // Cancel an in-progress session download (sender OR receiver can call this)
+        if (uri.startsWith("/cancel-session/") && (method == Method.POST || method == Method.GET)) {
+            val sessionId = uri.removePrefix("/cancel-session/").split("?")[0]
+            cancelledDownloads.add(sessionId)
+            mainHandler.postDelayed({ cancelledDownloads.remove(sessionId) }, 30_000L)
+            Log.d(TAG, "Session cancelled: $sessionId")
+            return cors(newFixedLengthResponse(Response.Status.OK, "application/json", """{"ok":true}"""))
+        }
 
         // Receiver notifies sender all files downloaded — sender can show success
         if (uri.startsWith("/session-downloaded/") && (method == Method.POST || method == Method.GET)) {
@@ -241,7 +252,7 @@ class BeamLanServer(
     }
 
     private fun handleCancel(sessionId: String): Response {
-        cancelSession(sessionId)
+        cancelUploadSession(sessionId)   // cancel normal upload session (not QR)
         return newFixedLengthResponse(Response.Status.OK, "application/json", """{"ok":true}""")
     }
 
@@ -388,10 +399,10 @@ class BeamLanServer(
         Log.d(TAG, "Session declined: $sessionId")
     }
 
-    /** Cancel a session that is currently uploading (receiver tapped Cancel) */
-    fun cancelSession(sessionId: String) {
+    /** Cancel a normal upload session (receiver tapped Cancel on incoming transfer) */
+    fun cancelUploadSession(sessionId: String) {
         sessions[sessionId]?.status = "cancelled"
-        Log.d(TAG, "Session cancelled: $sessionId")
+        Log.d(TAG, "Upload session cancelled: $sessionId")
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -525,10 +536,16 @@ class BeamLanServer(
     inner class ProgressInputStream(
         private val delegate: java.io.InputStream,
         private val totalBytes: Long,
-        private val filename: String
+        private val filename: String,
+        private val sessionId: String = ""
     ) : java.io.InputStream() {
         private var bytesRead = 0L
         private var lastPct   = -1
+
+        private fun checkCancelled() {
+            if (sessionId.isNotEmpty() && cancelledDownloads.contains(sessionId))
+                throw java.io.IOException("Transfer cancelled")
+        }
 
         private fun track(n: Int) {
             bytesRead += n
@@ -545,12 +562,14 @@ class BeamLanServer(
         }
 
         override fun read(): Int {
+            checkCancelled()
             val b = delegate.read()
             if (b != -1) track(1)
             return b
         }
 
         override fun read(b: ByteArray, off: Int, len: Int): Int {
+            checkCancelled()
             val n = delegate.read(b, off, len)
             if (n > 0) track(n)
             return n
@@ -621,7 +640,8 @@ class BeamLanServer(
                 } catch (e: Exception) {
                     return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", e.message ?: "error")
                 }
-                val stream = ProgressInputStream(rawStream, file.size, file.name)
+                cancelledDownloads.remove(sessionId)  // clear stale cancel flag
+                val stream = ProgressInputStream(rawStream, file.size, file.name, sessionId)
                 val res = newFixedLengthResponse(Response.Status.OK, file.type, stream, file.size)
                 res.addHeader("Content-Disposition", "attachment; filename=\"${encode(file.name)}\"")
                 res.addHeader("Cache-Control", "no-store")
@@ -637,14 +657,22 @@ class BeamLanServer(
         bSession.files.remove(file)
         if (!file.tempFile.exists())
             return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "File expired")
+        cancelledDownloads.remove(sessionId)
         val rawStream2 = java.io.FileInputStream(file.tempFile)
-        val stream2    = ProgressInputStream(rawStream2, file.size, file.name)
+        val stream2    = ProgressInputStream(rawStream2, file.size, file.name, sessionId)
         val res = newFixedLengthResponse(Response.Status.OK, file.type, stream2, file.size)
         res.addHeader("Content-Disposition", "attachment; filename=\"${encode(file.name)}\"")
         res.addHeader("Cache-Control", "no-store")
         res.addHeader("Access-Control-Expose-Headers", "Content-Length")
         mainHandler.postDelayed({ file.tempFile.delete() }, 5000)
         return res
+    }
+
+    /** Cancel a QR session download in progress (marks it so ProgressInputStream throws) */
+    fun cancelSession(sessionId: String) {
+        cancelledDownloads.add(sessionId)
+        mainHandler.postDelayed({ cancelledDownloads.remove(sessionId) }, 30_000L)
+        Log.d(TAG, "Session cancelled by sender: $sessionId")
     }
 
     fun getServerUrl(): String = "http://${getLocalIp()}:$PORT"

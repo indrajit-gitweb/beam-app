@@ -380,6 +380,20 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
+  // POST /cancel-session/:id  — cancel an in-progress session download
+  if (req.url.startsWith('/cancel-session/') && (req.method === 'POST' || req.method === 'GET')) {
+    const sessionId = req.url.slice('/cancel-session/'.length).split('?')[0];
+    const sess = browserReceiverSessions.get(sessionId);
+    if (sess) sess.cancelled = true;
+    // Notify sender browser via WebSocket
+    browsers.forEach(ws => {
+      try { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'session-cancelled', sessionId })); } catch(_) {}
+    });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   // POST /session-downloaded/:id  — receiver signals all files downloaded
   if (req.url.startsWith('/session-downloaded/') && (req.method === 'POST' || req.method === 'GET')) {
     const sessionId = req.url.slice('/session-downloaded/'.length).split('?')[0];
