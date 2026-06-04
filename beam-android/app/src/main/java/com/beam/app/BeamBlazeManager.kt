@@ -229,14 +229,21 @@ class BeamBlazeManager(
         }
     }
 
+    // ── Received payload registry ─────────────────────────────────────────────
+    // Store incoming Payload objects by ID so we can call .asFile().asJavaFile()
+    // in onPayloadTransferUpdate — the official API, no path guessing needed.
+    private val receivedPayloads = java.util.concurrent.ConcurrentHashMap<Long, Payload>()
+
     // ── Payload (file transfer) callback ──────────────────────────────────────
 
     private val payloadCallback = object : PayloadCallback() {
 
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
-            Log.d(TAG, "Receiving payload type=${payload.type} from $endpointId")
-            // FILE payloads are automatically saved to a temp location by Nearby
-            // We move the file to Downloads once transfer is complete (in onPayloadTransferUpdate)
+            Log.d(TAG, "Receiving payload id=${payload.id} type=${payload.type} from $endpointId")
+            // Store FILE payloads so we can retrieve the exact temp path on completion
+            if (payload.type == Payload.Type.FILE) {
+                receivedPayloads[payload.id] = payload
+            }
         }
 
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
@@ -253,11 +260,12 @@ class BeamBlazeManager(
                 PayloadTransferUpdate.Status.SUCCESS -> {
                     Log.d(TAG, "Transfer complete: payload ${update.payloadId}")
 
-                    // If we RECEIVED a file (not our activePayloadId), move it to Downloads
                     if (update.payloadId != activePayloadId) {
-                        // Nearby saves received files to app's cache — move to Downloads
-                        moveReceivedFileToDownloads(update.payloadId)
+                        // We RECEIVED this file — save it to Downloads
+                        val payload = receivedPayloads.remove(update.payloadId)
+                        saveReceivedPayload(payload, update.payloadId)
                     } else {
+                        // We SENT this file — notify sender side
                         callback?.onTransferComplete(activeFilename)
                         activePayloadId = null
                         activeFilename  = ""
@@ -267,6 +275,7 @@ class BeamBlazeManager(
                 PayloadTransferUpdate.Status.FAILURE,
                 PayloadTransferUpdate.Status.CANCELED -> {
                     Log.e(TAG, "Transfer failed/cancelled for payload ${update.payloadId}")
+                    receivedPayloads.remove(update.payloadId)
                     callback?.onTransferFailed("Transfer was interrupted")
                     activePayloadId = null
                 }
@@ -274,39 +283,96 @@ class BeamBlazeManager(
         }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── File saving ───────────────────────────────────────────────────────────
 
-    private fun moveReceivedFileToDownloads(payloadId: Long) {
-        // Nearby saves files to filesDir/nearby_connections/ with payloadId as name
-        val receivedFile = File(context.filesDir, "nearby_connections/$payloadId")
-        if (!receivedFile.exists()) {
-            // Try cache dir too
-            val cacheFile = File(context.cacheDir, "$payloadId")
-            if (cacheFile.exists()) saveToDownloads(cacheFile, payloadId.toString())
+    /**
+     * Save a received FILE payload to the Downloads folder.
+     *
+     * Uses payload.asFile().asJavaFile() — the official Nearby Connections API —
+     * so we always get the exact temp file path regardless of which Google Play
+     * Services version is installed. No path guessing, no silent data loss.
+     *
+     * Error handling:
+     *   - null payload  → logged + user notified (should never happen in practice)
+     *   - wrong type    → logged + user notified
+     *   - no temp file  → logged + user notified
+     *   - storage full  → catches IOException, notifies user to free space
+     *   - permission    → catches SecurityException, notifies user
+     */
+    private fun saveReceivedPayload(payload: Payload?, payloadId: Long) {
+        if (payload == null) {
+            Log.e(TAG, "Payload $payloadId missing from registry — file lost")
+            callback?.onTransferFailed("Received file could not be located. Please try again.")
             return
         }
-        saveToDownloads(receivedFile, payloadId.toString())
-    }
 
-    private fun saveToDownloads(src: File, fallbackName: String) {
+        if (payload.type != Payload.Type.FILE) {
+            Log.e(TAG, "Payload $payloadId is not a FILE type (${payload.type}) — cannot save")
+            callback?.onTransferFailed("Unsupported transfer type. Only files are supported.")
+            return
+        }
+
+        val tempFile = payload.asFile()?.asJavaFile()
+        if (tempFile == null || !tempFile.exists()) {
+            Log.e(TAG, "Temp file for payload $payloadId not found at ${tempFile?.absolutePath}")
+            callback?.onTransferFailed(
+                "Received file could not be found after transfer. " +
+                "Storage may be full or permissions may be missing."
+            )
+            return
+        }
+
+        val downloadsDir = android.os.Environment
+            .getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+
+        // Check available space before attempting the copy
+        val requiredBytes = tempFile.length()
+        val availableBytes = downloadsDir.freeSpace
+        if (availableBytes < requiredBytes + 1_048_576L) { // keep 1 MB buffer
+            Log.e(TAG, "Not enough space: need ${requiredBytes}B, have ${availableBytes}B")
+            tempFile.delete()
+            callback?.onTransferFailed(
+                "Not enough storage space to save the file. " +
+                "Free up space and ask the sender to try again."
+            )
+            return
+        }
+
+        // Use the original filename from the temp file (Nearby preserves it)
+        // Fall back to payloadId if name is empty for any reason
+        val originalName = tempFile.name.takeIf { it.isNotEmpty() } ?: "beam_blaze_$payloadId"
+
+        // Avoid overwriting existing files — append (1), (2), etc.
+        var dest = File(downloadsDir, originalName)
+        var counter = 1
+        while (dest.exists()) {
+            val ext  = if (originalName.contains('.')) ".${originalName.substringAfterLast('.')}" else ""
+            val base = if (originalName.contains('.')) originalName.substringBeforeLast('.') else originalName
+            dest = File(downloadsDir, "${base}_($counter)$ext")
+            counter++
+        }
+
         try {
-            val downloadsDir = android.os.Environment
-                .getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-            var dest = File(downloadsDir, src.name.takeIf { it.isNotEmpty() } ?: fallbackName)
-            var i = 1
-            while (dest.exists()) {
-                val ext  = if (dest.name.contains('.')) ".${dest.name.substringAfterLast('.')}" else ""
-                val base = if (dest.name.contains('.')) dest.name.substringBeforeLast('.') else dest.name
-                dest = File(downloadsDir, "${base}_($i)$ext")
-                i++
-            }
-            src.copyTo(dest, overwrite = false)
-            src.delete()
-            Log.d(TAG, "Saved to Downloads: ${dest.absolutePath}")
+            tempFile.copyTo(dest, overwrite = false)
+            tempFile.delete()   // clean up temp file after successful copy
+            Log.d(TAG, "Saved to Downloads: ${dest.absolutePath} (${dest.length()} B)")
             callback?.onTransferComplete(dest.name)
+        } catch (e: java.io.IOException) {
+            Log.e(TAG, "IO error saving to Downloads: ${e.message}")
+            dest.delete()   // remove partial file if copy failed mid-way
+            callback?.onTransferFailed(
+                "Could not save the file — storage may be full or unavailable. " +
+                "Error: ${e.message}"
+            )
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Permission error saving to Downloads: ${e.message}")
+            callback?.onTransferFailed(
+                "Storage permission denied. Please allow Beam to access Downloads " +
+                "in device Settings and try again."
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to move file to Downloads: ${e.message}")
-            callback?.onTransferFailed("File saved but could not be moved to Downloads")
+            Log.e(TAG, "Unexpected error saving to Downloads: ${e.message}")
+            callback?.onTransferFailed("Unexpected error saving file: ${e.message}")
         }
     }
 }
