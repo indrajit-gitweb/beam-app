@@ -2713,14 +2713,16 @@ function addCompletedFileCard(meta, blob, skipped = false) {
       '<button class="cfi-retry-yes">Download again</button>' +
       '<button class="cfi-retry-no">Cancel</button>';
 
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       if (btn.dataset.downloaded !== 'true') {
         // ── First download ───────────────────────────────────────────────
-        const a = Object.assign(document.createElement('a'),
-          { href: objUrl, download: meta.name, style: 'display:none' });
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        try {
+          await _saveBlob(blob, meta.name);
+        } catch(e) {
+          if (typeof showPopup === 'function')
+            showPopup('❌', 'Save failed', e.message, 'error', 4000);
+          return;
+        }
 
         btn.innerHTML    = '✓ Downloaded';
         btn.className    = 'cfi-download downloaded';
@@ -2742,12 +2744,8 @@ function addCompletedFileCard(meta, blob, skipped = false) {
       }
     });
 
-    confirm.querySelector('.cfi-retry-yes').addEventListener('click', () => {
-      const a = Object.assign(document.createElement('a'),
-        { href: objUrl, download: meta.name, style: 'display:none' });
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+    confirm.querySelector('.cfi-retry-yes').addEventListener('click', async () => {
+      try { await _saveBlob(blob, meta.name); } catch(e) { confirm.classList.remove('show'); return; }
       confirm.classList.remove('show');
       btn.innerHTML = '✓ Downloaded';
       btn.className = 'cfi-download downloaded';
@@ -2856,19 +2854,39 @@ async function _buildZip(files) {
                   { type: 'application/zip' });
 }
 
+// ── Helper: save a blob — uses native Android path in WebView, a.click() elsewhere ──
+async function _saveBlob(blob, filename) {
+  if (window.BeamNative) {
+    // Android WebView: blob: URL downloads don't work — POST to local server instead
+    const resp = await fetch('http://localhost:7777/save-to-downloads', {
+      method: 'POST',
+      body: blob,
+      headers: {
+        'Content-Type': blob.type || 'application/octet-stream',
+        'X-Filename':   encodeURIComponent(filename),
+        'Content-Length': String(blob.size),
+      },
+    });
+    if (!resp.ok) throw new Error('Server returned ' + resp.status);
+  } else {
+    // Browser / Mac Electron: standard blob download
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'),
+      { href: url, download: filename, style: 'display:none' });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  }
+}
+
 saveAllBtn.addEventListener('click', async () => {
   saveAllBtn.disabled = true;
   saveAllBtn.textContent = '📦 Zipping files…';
 
   try {
     const zipBlob = await _buildZip(receivedBlobLinks);
-    const url = URL.createObjectURL(zipBlob);
-    const a = Object.assign(document.createElement('a'),
-      { href: url, download: 'beam-files.zip', style: 'display:none' });
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    await _saveBlob(zipBlob, 'beam-files.zip');
 
     // Mark all files as downloaded
     receivedBlobLinks.forEach(({ name }) => {

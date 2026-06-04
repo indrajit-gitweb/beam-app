@@ -173,6 +173,11 @@ class BeamLanServer(
             else cors(newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Bad request"))
         }
 
+        // P2P receiver fallback: JS POSTs a blob → server saves to Downloads
+        // Used when Android WebView can't download blob: URLs via a.click()
+        if (uri == "/save-to-downloads" && method == Method.POST)
+            return cors(handleSaveToDownloads(session))
+
         // Serve app
         if (uri == "/" || uri == "/index.html" || uri.isEmpty())
             return cors(serveAsset("index.html", "text/html; charset=utf-8"))
@@ -673,6 +678,50 @@ class BeamLanServer(
         cancelledDownloads.add(sessionId)
         mainHandler.postDelayed({ cancelledDownloads.remove(sessionId) }, 30_000L)
         Log.d(TAG, "Session cancelled by sender: $sessionId")
+    }
+
+    private fun handleSaveToDownloads(session: IHTTPSession): Response {
+        val filename   = decode(session.headers["x-filename"] ?: "beam-file")
+        val contentLen = session.headers["content-length"]?.toLongOrNull() ?: 0L
+        val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val safeFilename = filename.replace(Regex("[/\\\\?%*:|\"<>]"), "_")
+        var dest = File(downloadsDir, safeFilename)
+        var i = 1
+        while (dest.exists()) {
+            val ext  = if (safeFilename.contains('.')) ".${safeFilename.substringAfterLast('.')}" else ""
+            val base = if (safeFilename.contains('.')) safeFilename.substringBeforeLast('.') else safeFilename
+            dest = File(downloadsDir, "${base}_($i)$ext")
+            i++
+        }
+        return try {
+            val fos = FileOutputStream(dest)
+            val buf = ByteArray(64 * 1024)
+            var n: Int
+            var total = 0L
+            try {
+                if (contentLen > 0) {
+                    var remaining = contentLen
+                    while (remaining > 0) {
+                        val toRead = minOf(buf.size.toLong(), remaining).toInt()
+                        n = session.inputStream.read(buf, 0, toRead)
+                        if (n == -1) break
+                        fos.write(buf, 0, n); total += n; remaining -= n
+                    }
+                } else {
+                    while (session.inputStream.read(buf).also { n = it } != -1) {
+                        fos.write(buf, 0, n); total += n
+                    }
+                }
+            } finally { fos.flush(); fos.close() }
+            Log.d(TAG, "Saved via P2P fallback: ${dest.name} ($total B)")
+            BeamNotificationHelper.showComplete(context, "Received ${dest.name}", "Saved to Downloads")
+            newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"ok":true,"saved":"${dest.name}","size":$total}""")
+        } catch (e: Exception) {
+            dest.delete()
+            Log.e(TAG, "save-to-downloads error: ${e.message}")
+            newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", e.message ?: "error")
+        }
     }
 
     fun getServerUrl(): String = "http://${getLocalIp()}:$PORT"
