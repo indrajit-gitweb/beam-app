@@ -5655,6 +5655,12 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }
   };
 
+  // Expose IIFE-private reset helpers so doAppReset() (module level) can reach them
+  window._resetOfflineInternals = function() {
+    try { _stopClearCountdown(); } catch(_) {}
+    _lastSentFiles = [];
+  };
+
 })();
 
 /* ── Global: LAN incoming download queue & progress bar ─────────────────────
@@ -5719,6 +5725,9 @@ window.hideResetConfirm = function() {
 window.doAppReset = function() {
   window.hideResetConfirm();
   _resetUserInitiated = true;
+
+  // Clear IIFE-private variables via the exposed helper
+  if (typeof window._resetOfflineInternals === 'function') window._resetOfflineInternals();
 
   // ── Stop active transfers ─────────────────────────────────────────────────
   if (window._sessionDownloadAbort) {
