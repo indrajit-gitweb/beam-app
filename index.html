@@ -494,17 +494,22 @@
     .dependency-strip .ds-text strong { color: #fbbf24; }
 
     /* ── How it works mode toggle ── */
-    /* Scrollable wrapper so 5 tabs never overflow on narrow screens */
+    /* Toggle wrapper: scrollable on narrow screens, centred on wide ones */
     .hiw-toggle-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch;
-                       padding-bottom: 2px; margin-bottom: 22px; }
-    .hiw-toggle { display: flex; background: var(--surface-2); border: 1px solid var(--border);
-                  border-radius: 10px; padding: 4px; gap: 4px;
-                  width: max-content; min-width: 100%; box-sizing: border-box; }
+                       padding-bottom: 2px; margin-bottom: 22px;
+                       display: flex; justify-content: center; }
+    .hiw-toggle { display: inline-flex; background: var(--surface-2);
+                  border: 1px solid var(--border); border-radius: 10px;
+                  padding: 4px; gap: 4px;
+                  /* fit-content: shrinks to tab width on large screens,
+                     never leaves empty space; overflow-x on wrapper
+                     handles narrow screens without clipping */
+                  width: fit-content; max-width: 100%; box-sizing: border-box; }
     .hiw-tab { padding: 7px 18px; border-radius: 7px; border: none; background: transparent;
                color: var(--muted); font-size: .78rem; font-weight: 700; cursor: pointer;
                transition: all .18s; letter-spacing: .01em; white-space: nowrap; flex-shrink: 0; }
     .hiw-tab:hover { color: var(--muted-2); }
-    /* Tighter tabs on very narrow screens */
+    /* Slightly tighter tabs on narrow phones */
     @media (max-width: 420px) {
       .hiw-tab { padding: 6px 11px; font-size: .72rem; }
     }
