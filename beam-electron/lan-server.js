@@ -427,7 +427,9 @@ const httpServer = http.createServer((req, res) => {
   }
 
   // ── Serve index.html ──────────────────────────────────────────────────────────
-  if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
+  // Strip query string before matching — QR URLs carry ?connect=ip param
+  const urlPath = req.url.split('?')[0];
+  if (req.method === 'GET' && (urlPath === '/' || urlPath === '/index.html')) {
     try {
       const html = fs.readFileSync(htmlPath, 'utf8');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
