@@ -519,6 +519,46 @@ class BeamLanServer(
         }
     }
 
+    // ── Progress-tracking InputStream ─────────────────────────────────────────
+    // Wraps any InputStream and fires onProgress as NanoHTTPD reads bytes to
+    // send to the receiver — gives the sender real-time download progress.
+    inner class ProgressInputStream(
+        private val delegate: java.io.InputStream,
+        private val totalBytes: Long,
+        private val filename: String
+    ) : java.io.InputStream() {
+        private var bytesRead = 0L
+        private var lastPct   = -1
+
+        private fun track(n: Int) {
+            bytesRead += n
+            val pct = if (totalBytes > 0) (bytesRead * 100 / totalBytes).toInt() else 0
+            if (pct != lastPct) {
+                lastPct = pct
+                context.sendBroadcast(Intent(BeamTransferService.ACTION_TRANSFER_PROGRESS).apply {
+                    putExtra("pct",              pct)
+                    putExtra("filename",         filename)
+                    putExtra("bytesTransferred", bytesRead)
+                    putExtra("totalBytes",       totalBytes)
+                })
+            }
+        }
+
+        override fun read(): Int {
+            val b = delegate.read()
+            if (b != -1) track(1)
+            return b
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            val n = delegate.read(b, off, len)
+            if (n > 0) track(n)
+            return n
+        }
+
+        override fun close() = delegate.close()
+    }
+
     /** Link the sender's stored URIs directly to the session — zero disk copy. */
     fun linkUrisToSession(sessionId: String, uris: List<android.net.Uri>) {
         val list = mutableListOf<NativeFile>()
@@ -575,12 +615,13 @@ class BeamLanServer(
             if (file != null) {
                 list.remove(file)
                 if (list.isEmpty()) nativeFileSessions.remove(sessionId)
-                val stream = try {
+                val rawStream = try {
                     context.contentResolver.openInputStream(file.uri)
                         ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Cannot open file")
                 } catch (e: Exception) {
                     return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", e.message ?: "error")
                 }
+                val stream = ProgressInputStream(rawStream, file.size, file.name)
                 val res = newFixedLengthResponse(Response.Status.OK, file.type, stream, file.size)
                 res.addHeader("Content-Disposition", "attachment; filename=\"${encode(file.name)}\"")
                 res.addHeader("Cache-Control", "no-store")
@@ -596,8 +637,9 @@ class BeamLanServer(
         bSession.files.remove(file)
         if (!file.tempFile.exists())
             return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "File expired")
-        val res = newFixedLengthResponse(Response.Status.OK, file.type,
-            java.io.FileInputStream(file.tempFile), file.size)
+        val rawStream2 = java.io.FileInputStream(file.tempFile)
+        val stream2    = ProgressInputStream(rawStream2, file.size, file.name)
+        val res = newFixedLengthResponse(Response.Status.OK, file.type, stream2, file.size)
         res.addHeader("Content-Disposition", "attachment; filename=\"${encode(file.name)}\"")
         res.addHeader("Cache-Control", "no-store")
         res.addHeader("Access-Control-Expose-Headers", "Content-Length")

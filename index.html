@@ -3928,13 +3928,31 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   }
 
   // ── Select device and start transfer ─────────────────────────────────────
+  // ── Sender: switch to live progress view when receiver starts downloading ─────
+  // Called the first time onNativeTransferProgress fires during a browser session
+  function ensureSenderTransferView() {
+    const offStep = document.getElementById('offline-step-transfer');
+    if (offStep && offStep.style.display !== 'none') return; // already showing
+    const p = window._pendingBrowserSession;
+    if (!p) return;
+    showOfflineStep('transfer');
+    const d = document.getElementById('offline-transfer-direction');
+    if (d) d.textContent = 'Sending to';
+    document.getElementById('offline-transfer-device').textContent = p.name;
+    setOfflineProgress(0, 'Receiver is downloading…');
+  }
+
   // ── Sender callback: receiver finished downloading (session complete) ─────────
   window.onBrowserSessionComplete = function() {
     const p = window._pendingBrowserSession;
     window._pendingBrowserSession = null;
+    _speedWindow = []; _xferLastBytes = 0;
+    ['offline-detail-row','recv-detail-row'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.style.display = 'none';
+    });
     showOfflineStep('success');
     document.getElementById('offline-success-detail').textContent =
-      (p ? p.name : 'Receiver') + ' has downloaded all files successfully.';
+      (p ? p.name : 'Receiver') + ' downloaded all files successfully.';
     if (typeof showPopup === 'function')
       showPopup('✅', 'Transfer complete!',
         (p ? p.name : 'Receiver') + ' received all files.', 'success', 5000);
@@ -4545,6 +4563,9 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     const bytes = bytesTransferred || 0;
     const total = totalBytes       || 0;
     _xferLastBytes = bytes;
+
+    // If we have a pending browser session, switch to transfer view now
+    if (window._pendingBrowserSession) ensureSenderTransferView();
 
     const speed   = calcSpeed(bytes);
     const etaSecs = (speed > 0 && total > bytes) ? (total - bytes) / speed : 0;
