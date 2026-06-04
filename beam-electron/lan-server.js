@@ -383,7 +383,9 @@ const httpServer = http.createServer((req, res) => {
   // POST /session-downloaded/:id  — receiver signals all files downloaded
   if (req.url.startsWith('/session-downloaded/') && (req.method === 'POST' || req.method === 'GET')) {
     const sessionId = req.url.slice('/session-downloaded/'.length).split('?')[0];
-    browserReceiverSessions.delete(sessionId);
+    // Clear files but keep session alive for next batch
+    const s = browserReceiverSessions.get(sessionId);
+    if (s) s.files = [];
     const msg = JSON.stringify({ type: 'session-complete', sessionId });
     browsers.forEach(ws => { try { if (ws.readyState === 1) ws.send(msg); } catch(_) {} });
     res.writeHead(200, { 'Content-Type': 'application/json' });

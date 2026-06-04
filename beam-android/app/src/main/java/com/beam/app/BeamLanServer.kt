@@ -141,7 +141,9 @@ class BeamLanServer(
         // Receiver notifies sender all files downloaded — sender can show success
         if (uri.startsWith("/session-downloaded/") && (method == Method.POST || method == Method.GET)) {
             val sessionId = uri.removePrefix("/session-downloaded/").split("?")[0]
-            browserSessions.remove(sessionId)
+            // Clear files but KEEP the session alive — receiver stays registered
+            // so sender can send another batch without a new QR scan
+            browserSessions[sessionId]?.files?.clear()
             context.sendBroadcast(Intent("com.beam.app.SESSION_DOWNLOADED").apply {
                 putExtra("sessionId", sessionId)
             })
