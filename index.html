@@ -397,6 +397,43 @@
     .app-popup-close:hover { color: var(--text); }
 
     /* ── How it works ── */
+    /* ── Reset button ── */
+    .reset-bar { width: 100%; display: flex; justify-content: center; margin: 28px 0 8px; }
+    .reset-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 18px; border-radius: 8px; cursor: pointer;
+      font-size: .76rem; font-weight: 600; letter-spacing: .02em;
+      border: 1px solid rgba(239,68,68,.25); background: transparent;
+      color: rgba(239,68,68,.55); transition: all .18s;
+    }
+    .reset-btn:hover { border-color: rgba(239,68,68,.5); color: #f87171;
+                       background: rgba(239,68,68,.07); }
+    /* Reset confirmation overlay */
+    #reset-confirm {
+      display: none; visibility: hidden; pointer-events: none;
+      position: fixed; inset: 0; background: rgba(0,0,0,.65);
+      z-index: 9998; align-items: center; justify-content: center; padding: 20px;
+    }
+    #reset-confirm .rc-box {
+      background: var(--surface-2); border: 1px solid rgba(239,68,68,.3);
+      border-radius: 14px; padding: 22px 24px; max-width: 300px; width: 100%;
+      text-align: center;
+    }
+    #reset-confirm .rc-icon  { font-size: 2rem; margin-bottom: 10px; }
+    #reset-confirm .rc-title { font-size: .95rem; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+    #reset-confirm .rc-body  { font-size: .76rem; color: var(--muted-2); line-height: 1.55; margin-bottom: 20px; }
+    #reset-confirm .rc-btns  { display: flex; gap: 8px; }
+    #reset-confirm .rc-cancel {
+      flex: 1; padding: 9px; border-radius: 8px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); font-size: .82rem; cursor: pointer;
+    }
+    #reset-confirm .rc-confirm {
+      flex: 1; padding: 9px; border-radius: 8px; border: 1px solid rgba(239,68,68,.4);
+      background: rgba(239,68,68,.1); color: #f87171;
+      font-size: .82rem; font-weight: 700; cursor: pointer; transition: background .15s;
+    }
+    #reset-confirm .rc-confirm:hover { background: rgba(239,68,68,.2); }
+
     .how-section { width: 100%; margin-top: 48px; position: relative; }
     /* Scroll reveal — base state (footer etc.) */
     .reveal { opacity: 0; transform: translateY(28px); transition: opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1), transform 0.65s cubic-bezier(0.22, 1, 0.36, 1); }
@@ -1700,6 +1737,35 @@
     </div><!-- /panel-recv -->
 
   </div><!-- /card -->
+
+  <!-- ── Reset button ── -->
+  <div class="reset-bar">
+    <button class="reset-btn" onclick="showResetConfirm()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+        <path d="M3 3v5h5"/>
+      </svg>
+      Reset app
+    </button>
+  </div>
+
+  <!-- Reset confirmation overlay -->
+  <div id="reset-confirm">
+    <div class="rc-box">
+      <div class="rc-icon">⚠️</div>
+      <div class="rc-title">Reset the app?</div>
+      <div class="rc-body">
+        This will clear all selected files, stop any active transfer,
+        and return the app to its initial state.<br><br>
+        <strong style="color:var(--warn)">This cannot be undone.</strong>
+      </div>
+      <div class="rc-btns">
+        <button class="rc-cancel"  onclick="hideResetConfirm()">Cancel</button>
+        <button class="rc-confirm" onclick="doAppReset()">Yes, reset</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ── How it works ── -->
   <section class="how-section scan-section" aria-label="How it works">
@@ -5633,6 +5699,58 @@ function _processDlQueue() {
   _dlActive = true;
   const item = _dlQueue.shift();
   triggerHttpDownload(item.url, item.filename, item.fromName);
+}
+
+// ── App Reset ─────────────────────────────────────────────────────────────────
+
+function showResetConfirm() {
+  const el = document.getElementById('reset-confirm');
+  if (el) { el.style.display = 'flex'; el.style.visibility = 'visible'; el.style.pointerEvents = 'auto'; }
+}
+
+function hideResetConfirm() {
+  const el = document.getElementById('reset-confirm');
+  if (el) { el.style.display = 'none'; el.style.visibility = 'hidden'; el.style.pointerEvents = 'none'; }
+}
+
+function doAppReset() {
+  hideResetConfirm();
+
+  // 1. Stop any active offline/blaze transfers
+  try { if (typeof window.cancelOfflineTransfer === 'function') window.cancelOfflineTransfer(); } catch(_) {}
+  try { if (typeof window.cancelIncomingTransfer === 'function') window.cancelIncomingTransfer(); } catch(_) {}
+  try { if (window.BeamNative?.cancelTransfer)  window.BeamNative.cancelTransfer();  } catch(_) {}
+  try { if (window.BeamNative?.stopBeamBlaze)   window.BeamNative.stopBeamBlaze();   } catch(_) {}
+  try { if (window.BeamNative?.stopBlazeAdvertising) window.BeamNative.stopBlazeAdvertising(); } catch(_) {}
+
+  // 2. Reset the send-side state (clears files, destroys peer, resets UI)
+  try { if (typeof clearQueue === 'function') clearQueue(); } catch(_) {}
+  try { if (typeof resetSenderToIdle === 'function') resetSenderToIdle(); } catch(_) {}
+
+  // 3. Reset offline mode
+  try { if (typeof window.resetOfflineMode === 'function') window.resetOfflineMode(); } catch(_) {}
+
+  // 4. Switch back to P2P tab and Send panel
+  try { if (typeof selectMode === 'function') selectMode('p2p'); } catch(_) {}
+  try { if (typeof window.switchTab === 'function') window.switchTab('send'); } catch(_) {}
+
+  // 5. Clear global session state
+  window._beamQRConnectIP          = null;
+  window._beamReceiverMode         = false;
+  window._receiverSessionId        = null;
+  window._beamQRSenderBase         = null;
+  window._pendingBrowserSession     = null;
+  window._offlinePendingSessionId  = null;
+  window._currentTransferSessionId = null;
+  window._currentTransferReceiverIp = null;
+  if (window._sessionDownloadAbort) { try { window._sessionDownloadAbort.abort(); } catch(_) {} window._sessionDownloadAbort = null; }
+
+  // 6. Close any overlays
+  document.getElementById('lan-incoming-overlay')?.classList.remove('show');
+  document.getElementById('blaze-incoming-overlay')?.style && (document.getElementById('blaze-incoming-overlay').style.display = 'none');
+
+  if (typeof showPopup === 'function')
+    showPopup('🔄', 'App reset', 'Everything cleared. Ready to start fresh.', 'success', 3000);
 }
 
 // ── QR Connect startup handler ────────────────────────────────────────────────
