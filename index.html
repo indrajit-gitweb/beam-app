@@ -4100,9 +4100,11 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 
   // ── Session-based transfer: sender uploads to own server for browser receiver ─
   async function startBrowserSessionTransfer(dev, files) {
-    const ownBase = IS_ELECTRON
+    // On Android (file:// protocol) and Electron, server is on localhost.
+    // On browser served from LAN server, use window.location.hostname.
+    const ownBase = IS_ELECTRON || isAndroid() || !window.location.hostname
       ? 'http://localhost:' + LAN_PORT
-      : (window.location.hostname ? 'http://' + window.location.hostname + ':' + LAN_PORT : null);
+      : 'http://' + window.location.hostname + ':' + LAN_PORT;
     if (!ownBase) { showOfflineStep('fail'); return; }
 
     showOfflineStep('transfer');
