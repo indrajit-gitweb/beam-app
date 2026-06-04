@@ -201,6 +201,16 @@ class BeamWebInterface(private val context: Context) {
         fun sendBlazeFiles(endpointId: String)
     }
 
+    /** Hard-reload the WebView — exact same state as reopening the app */
+    @JavascriptInterface
+    fun reloadApp() {
+        (context as? android.app.Activity)?.runOnUiThread {
+            (context as? android.app.Activity)
+                ?.findViewById<android.webkit.WebView>(com.beam.app.R.id.webView)
+                ?.loadUrl("file:///android_asset/index.html")
+        }
+    }
+
     /** Returns stored URIs for Beam Blaze to stream directly (no base64 needed) */
     fun getStoredUris(): List<android.net.Uri> = storedUris
 
