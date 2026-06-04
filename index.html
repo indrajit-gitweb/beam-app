@@ -2774,50 +2774,128 @@ function addCompletedFileCard(meta, blob, skipped = false) {
 
 // ── Save All ──────────────────────────────────────────────────────────────────
 
-// async/await preserves the browser's user-gesture context through promise chains,
-// so every a.click() below is treated as a direct user action — no download blocking.
+// ── Pure-JS ZIP creator (no libraries) ───────────────────────────────────────
+// Browsers block multiple automatic blob downloads from a single gesture.
+// Bundling all files into one ZIP sidesteps the restriction entirely.
+
+function _crc32(data) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < data.length; i++) {
+    c ^= data[i];
+    for (let j = 0; j < 8; j++) c = (c >>> 1) ^ (c & 1 ? 0xEDB88320 : 0);
+  }
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+async function _buildZip(files) {
+  // files: [{name: string, blob: Blob}]
+  const enc  = new TextEncoder();
+  const parts = [];
+  const cdirs = [];
+  let   off   = 0;
+
+  for (const { name, blob } of files) {
+    const data  = new Uint8Array(await blob.arrayBuffer());
+    const nb    = enc.encode(name);
+    const crc   = _crc32(data);
+    const sz    = data.length;
+
+    // Local file header (30 + name)
+    const lh = new DataView(new ArrayBuffer(30 + nb.length));
+    lh.setUint32(0,  0x04034b50, true);
+    lh.setUint16(4,  20,         true);
+    lh.setUint16(6,  0,          true);
+    lh.setUint16(8,  0,          true);  // store (no compression)
+    lh.setUint16(10, 0,          true);
+    lh.setUint16(12, 0,          true);
+    lh.setUint32(14, crc,        true);
+    lh.setUint32(18, sz,         true);
+    lh.setUint32(22, sz,         true);
+    lh.setUint16(26, nb.length,  true);
+    lh.setUint16(28, 0,          true);
+    new Uint8Array(lh.buffer).set(nb, 30);
+    parts.push(lh.buffer, data);
+
+    // Central directory entry (46 + name)
+    const cd = new DataView(new ArrayBuffer(46 + nb.length));
+    cd.setUint32(0,  0x02014b50, true);
+    cd.setUint16(4,  20,         true);
+    cd.setUint16(6,  20,         true);
+    cd.setUint16(8,  0,          true);
+    cd.setUint16(10, 0,          true);
+    cd.setUint16(12, 0,          true);
+    cd.setUint16(14, 0,          true);
+    cd.setUint32(16, crc,        true);
+    cd.setUint32(20, sz,         true);
+    cd.setUint32(24, sz,         true);
+    cd.setUint16(28, nb.length,  true);
+    cd.setUint16(30, 0,          true);
+    cd.setUint16(32, 0,          true);
+    cd.setUint16(34, 0,          true);
+    cd.setUint16(36, 0,          true);
+    cd.setUint32(38, 0,          true);
+    cd.setUint32(42, off,        true);
+    new Uint8Array(cd.buffer).set(nb, 46);
+    cdirs.push(cd.buffer);
+
+    off += 30 + nb.length + sz;
+  }
+
+  const cdSize = cdirs.reduce((s, b) => s + b.byteLength, 0);
+  const eocd   = new DataView(new ArrayBuffer(22));
+  eocd.setUint32(0,  0x06054b50,    true);
+  eocd.setUint16(4,  0,             true);
+  eocd.setUint16(6,  0,             true);
+  eocd.setUint16(8,  files.length,  true);
+  eocd.setUint16(10, files.length,  true);
+  eocd.setUint32(12, cdSize,        true);
+  eocd.setUint32(16, off,           true);
+  eocd.setUint16(20, 0,             true);
+
+  return new Blob([...parts, ...cdirs, eocd.buffer],
+                  { type: 'application/zip' });
+}
+
 saveAllBtn.addEventListener('click', async () => {
   saveAllBtn.disabled = true;
-  saveAllBtn.textContent = 'Saving…';
+  saveAllBtn.textContent = '📦 Zipping files…';
 
-  for (let i = 0; i < receivedBlobLinks.length; i++) {
-    const { name, blob } = receivedBlobLinks[i];
-
-    // Trigger download — gesture is still active because we're in an async chain
-    const url = URL.createObjectURL(blob);
+  try {
+    const zipBlob = await _buildZip(receivedBlobLinks);
+    const url = URL.createObjectURL(zipBlob);
     const a = Object.assign(document.createElement('a'),
-      { href: url, download: name, style: 'display:none' });
+      { href: url, download: 'beam-files.zip', style: 'display:none' });
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
 
-    // Update button state for this file
-    const btn = completedFiles.querySelector(`button[data-filename="${CSS.escape(name)}"]`);
-    if (btn && btn.dataset.downloaded !== 'true') {
-      btn.innerHTML = '✓ Downloaded';
-      btn.className = 'cfi-download downloaded';
-      btn.dataset.downloaded = 'true';
-      const item = btn.closest('.completed-file-item');
-      if (item) item.dataset.downloaded = 'true';
-      _p2pDownloaded.add(name);
-      setTimeout(() => {
-        if (btn.dataset.downloaded === 'true') {
-          btn.innerHTML = '↓ Download again';
-          btn.className = 'cfi-download retry';
-        }
-      }, 1500);
-    }
-
-    // Short pause before next file — keeps gesture context alive via await
-    if (i < receivedBlobLinks.length - 1) {
-      await new Promise(r => setTimeout(r, 300));
-    }
+    // Mark all files as downloaded
+    receivedBlobLinks.forEach(({ name }) => {
+      const btn = completedFiles.querySelector(`button[data-filename="${CSS.escape(name)}"]`);
+      if (btn && btn.dataset.downloaded !== 'true') {
+        btn.innerHTML = '✓ Downloaded';
+        btn.className = 'cfi-download downloaded';
+        btn.dataset.downloaded = 'true';
+        const item = btn.closest('.completed-file-item');
+        if (item) item.dataset.downloaded = 'true';
+        _p2pDownloaded.add(name);
+        setTimeout(() => {
+          if (btn.dataset.downloaded === 'true') {
+            btn.innerHTML = '↓ Download again';
+            btn.className = 'cfi-download retry';
+          }
+        }, 1500);
+      }
+    });
+    _checkAllDownloaded();
+  } catch(e) {
+    if (typeof showPopup === 'function')
+      showPopup('❌', 'Zip failed', e.message, 'error', 4000);
   }
 
   saveAllBtn.disabled = false;
   saveAllBtn.innerHTML = `💾 Save All ${receivedBlobLinks.length} Files to Device`;
-  _checkAllDownloaded();
 });
 
 // ── Sender: file queue management ─────────────────────────────────────────────
