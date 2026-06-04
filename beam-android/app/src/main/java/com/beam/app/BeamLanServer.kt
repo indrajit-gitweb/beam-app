@@ -457,20 +457,37 @@ class BeamLanServer(
         val filename   = decode(h["x-filename"]   ?: "file")
         val filetype   = h["x-filetype"]          ?: "application/octet-stream"
         val sessionId  = h["x-session-id"]        ?: ""
+        val contentLen = h["content-length"]?.toLongOrNull() ?: 0L
         val bSession   = browserSessions[sessionId]
             ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Session not found")
 
         return try {
-            val out   = java.io.ByteArrayOutputStream()
-            val buf   = ByteArray(64 * 1024)
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(64 * 1024)
             var n: Int
-            while (session.inputStream.read(buf).also { n = it } != -1) {
-                out.write(buf, 0, n)
+
+            // Read exactly Content-Length bytes — reading until EOF causes
+            // SocketTimeoutException because NanoHTTPD keeps the socket alive
+            if (contentLen > 0) {
+                var remaining = contentLen
+                while (remaining > 0) {
+                    val toRead = minOf(buf.size.toLong(), remaining).toInt()
+                    n = session.inputStream.read(buf, 0, toRead)
+                    if (n == -1) break
+                    out.write(buf, 0, n)
+                    remaining -= n
+                }
+            } else {
+                // Fallback: no Content-Length (shouldn't happen from XHR but handle gracefully)
+                while (session.inputStream.read(buf).also { n = it } != -1) {
+                    out.write(buf, 0, n)
+                }
             }
+
             val data   = out.toByteArray()
             val fileId = generateId()
             bSession.files.add(StoredFile(fileId, filename, data.size.toLong(), filetype, data))
-            Log.d(TAG, "File stored for browser session $sessionId: $filename (${data.size} B)")
+            Log.d(TAG, "File stored for session $sessionId: $filename (${data.size} B)")
             newFixedLengthResponse(Response.Status.OK, "application/json",
                 """{"ok":true,"fileId":"$fileId"}""")
         } catch (e: Exception) {
