@@ -2703,6 +2703,7 @@ function addCompletedFileCard(meta, blob, skipped = false) {
     const btn = document.createElement('button');
     btn.className = 'cfi-download';
     btn.innerHTML = '⬇ Download';
+    btn.dataset.filename = meta.name;  // used by Save All to find and update state
 
     // Inline "Already saved — download again?" prompt
     const confirm = document.createElement('div');
@@ -2776,6 +2777,7 @@ function addCompletedFileCard(meta, blob, skipped = false) {
 saveAllBtn.addEventListener('click', () => {
   receivedBlobLinks.forEach(({ name, blob }, i) => {
     setTimeout(() => {
+      // Download the file
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = name;
@@ -2783,8 +2785,29 @@ saveAllBtn.addEventListener('click', () => {
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }, i * 400); // stagger to avoid browser blocking
+
+      // Update the matching button state (same logic as individual download)
+      const btn = completedFiles.querySelector(`button[data-filename="${CSS.escape(name)}"]`);
+      if (btn && btn.dataset.downloaded !== 'true') {
+        btn.innerHTML = '✓ Downloaded';
+        btn.className = 'cfi-download downloaded';
+        btn.dataset.downloaded = 'true';
+        const item = btn.closest('.completed-file-item');
+        if (item) item.dataset.downloaded = 'true';
+        _p2pDownloaded.add(name);
+        // Fade to retry button after a moment
+        setTimeout(() => {
+          if (btn.dataset.downloaded === 'true') {
+            btn.innerHTML = '↓ Download again';
+            btn.className = 'cfi-download retry';
+          }
+        }, 2000);
+      }
+    }, i * 400);
   });
+
+  // Check all-done banner after last file state updates
+  setTimeout(() => _checkAllDownloaded(), receivedBlobLinks.length * 400 + 2500);
 });
 
 // ── Sender: file queue management ─────────────────────────────────────────────
