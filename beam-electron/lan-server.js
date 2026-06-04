@@ -34,6 +34,10 @@ const DEVICE_NAME = os.hostname().replace('.local', '');
 // sessionId → { senderName, senderIp, files, status, createdAt }
 const sessions = new Map();
 
+// ── Browser receiver sessions (QR flow) ───────────────────────────────────────
+// sessionId → { receiverName, files: [{fileId, name, size, type, buffer}] }
+const browserReceiverSessions = new Map();
+
 function cleanOldSessions() {
   const cutoff = Date.now() - 5 * 60_000;
   for (const [id, s] of sessions) {
@@ -308,6 +312,89 @@ const httpServer = http.createServer((req, res) => {
       console.error('[beam-lan] Upload error:', err);
       res.writeHead(500); res.end('Upload error');
     });
+    return;
+  }
+
+  // ── Browser receiver sessions (QR flow) ──────────────────────────────────────
+
+  // POST /receiver-ready  — browser scanned QR, wants to receive files
+  if (req.url === '/receiver-ready' && req.method === 'POST') {
+    let body = '';
+    req.on('data', d => body += d);
+    req.on('end', () => {
+      try {
+        const { receiverName = 'Browser' } = JSON.parse(body || '{}');
+        const sessionId = require('crypto').randomBytes(16).toString('hex');
+        browserReceiverSessions.set(sessionId, { receiverName, files: [] });
+        // Auto-expire after 10 min
+        setTimeout(() => browserReceiverSessions.delete(sessionId), 10 * 60 * 1000);
+        // Notify sender's browser via WebSocket
+        const msg = JSON.stringify({ type: 'receiver-ready', sessionId, receiverName });
+        browsers.forEach(ws => { try { if (ws.readyState === 1) ws.send(msg); } catch (_) {} });
+        console.log(`[beam-lan] Browser receiver ready: ${receiverName} (${sessionId})`);
+        res.writeHead(200, { 'Content-Type': 'application/json', });
+        res.end(JSON.stringify({ ok: true, sessionId, senderName: DEVICE_NAME }));
+      } catch (e) { res.writeHead(500); res.end('error'); }
+    });
+    return;
+  }
+
+  // GET /pending-receivers  — sender polls for browser devices waiting to receive
+  if (req.url === '/pending-receivers' && req.method === 'GET') {
+    const receivers = [];
+    browserReceiverSessions.forEach((sess, id) => {
+      if (sess.files.length === 0) receivers.push({ sessionId: id, receiverName: sess.receiverName });
+    });
+    res.writeHead(200, { 'Content-Type': 'application/json', });
+    res.end(JSON.stringify({ receivers }));
+    return;
+  }
+
+  // POST /upload-for-session  — sender uploads a file for a browser receiver session
+  if (req.url === '/upload-for-session' && req.method === 'POST') {
+    const filename  = decodeURIComponent(req.headers['x-filename']  || 'file');
+    const filetype  = req.headers['x-filetype']  || 'application/octet-stream';
+    const sessionId = req.headers['x-session-id'] || '';
+    const sess      = browserReceiverSessions.get(sessionId);
+    if (!sess) { res.writeHead(404); res.end('Session not found'); return; }
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      const fileId = require('crypto').randomBytes(12).toString('hex');
+      sess.files.push({ fileId, name: filename, size: buffer.length, type: filetype, buffer });
+      console.log(`[beam-lan] File stored for session ${sessionId}: ${filename} (${buffer.length} B)`);
+      res.writeHead(200, { 'Content-Type': 'application/json', });
+      res.end(JSON.stringify({ ok: true, fileId }));
+    });
+    return;
+  }
+
+  // GET /files-for-session/:id  — receiver polls for available files
+  if (req.method === 'GET' && req.url.startsWith('/files-for-session/')) {
+    const sessionId = req.url.slice('/files-for-session/'.length).split('?')[0];
+    const sess      = browserReceiverSessions.get(sessionId);
+    const files     = sess ? sess.files.map(f => ({ fileId: f.fileId, name: f.name, size: f.size, type: f.type })) : [];
+    res.writeHead(200, { 'Content-Type': 'application/json', });
+    res.end(JSON.stringify({ files }));
+    return;
+  }
+
+  // GET /download-for-session/:sessionId/:fileId  — receiver downloads a file
+  if (req.method === 'GET' && req.url.startsWith('/download-for-session/')) {
+    const parts     = req.url.slice('/download-for-session/'.length).split('?')[0].split('/');
+    const sessionId = parts[0], fileId = parts[1];
+    const sess      = browserReceiverSessions.get(sessionId);
+    const file      = sess?.files.find(f => f.fileId === fileId);
+    if (!file) { res.writeHead(404); res.end('Not found'); return; }
+    sess.files.splice(sess.files.indexOf(file), 1); // remove after delivery
+    res.writeHead(200, {
+      'Content-Type':        file.type,
+      'Content-Disposition': `attachment; filename="${encodeURIComponent(file.name)}"`,
+      'Content-Length':      String(file.buffer.length),
+      'Cache-Control':       'no-store',
+    });
+    res.end(file.buffer);
     return;
   }
 

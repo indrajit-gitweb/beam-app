@@ -52,6 +52,26 @@ class BeamLanServer(
         val createdAt:  Long = System.currentTimeMillis()
     )
 
+    // ── Browser receiver sessions (QR flow) ────────────────────────────────────
+    // When a browser device scans the QR it calls /receiver-ready and gets a
+    // sessionId. The sender sees this device and uploads files for that session.
+    // The browser polls /files-for-session/:id and downloads when ready.
+
+    data class BrowserReceiverSession(
+        val sessionId:    String,
+        val receiverName: String,
+        val files: MutableList<StoredFile> = mutableListOf()
+    )
+    data class StoredFile(
+        val fileId: String,
+        val name:   String,
+        val size:   Long,
+        val type:   String,
+        val data:   ByteArray
+    )
+
+    private val browserSessions = ConcurrentHashMap<String, BrowserReceiverSession>()
+
     private val sessions    = ConcurrentHashMap<String, TransferSession>()
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -101,6 +121,27 @@ class BeamLanServer(
         // File receive — stream directly to Downloads (no memory buffer!)
         if (uri == "/upload" && method == Method.POST)
             return cors(handleUpload(session))
+
+        // ── Browser receiver session (QR flow) ─────────────────────────────────
+        // Receiver calls /receiver-ready → gets sessionId → polls /files-for-session
+        // Sender uploads to /upload-for-session → receiver downloads
+        if (uri == "/receiver-ready" && method == Method.POST)
+            return cors(handleReceiverReady(session))
+
+        if (uri == "/pending-receivers" && method == Method.GET)
+            return cors(handlePendingReceivers())
+
+        if (uri.startsWith("/upload-for-session") && method == Method.POST)
+            return cors(handleUploadForSession(session))
+
+        if (uri.startsWith("/files-for-session/") && method == Method.GET)
+            return cors(handleFilesForSession(uri.removePrefix("/files-for-session/").split("?")[0]))
+
+        if (uri.startsWith("/download-for-session/") && method == Method.GET) {
+            val parts = uri.removePrefix("/download-for-session/").split("/")
+            return if (parts.size >= 2) cors(handleDownloadForSession(parts[0], parts[1]))
+            else cors(newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Bad request"))
+        }
 
         // Serve app
         if (uri == "/" || uri == "/index.html" || uri.isEmpty())
@@ -373,11 +414,107 @@ class BeamLanServer(
         return "127.0.0.1"
     }
 
+    // ── Browser receiver session handlers (QR flow) ───────────────────────────
+
+    private fun handleReceiverReady(session: IHTTPSession): Response {
+        return try {
+            val json         = try { JSONObject(readBodyString(session)) } catch (_: Exception) { JSONObject() }
+            val receiverName = json.optString("receiverName", "Browser")
+            val sessionId    = generateId()
+            browserSessions[sessionId] = BrowserReceiverSession(sessionId, receiverName)
+            // Auto-expire after 10 minutes
+            mainHandler.postDelayed({ browserSessions.remove(sessionId) }, 10 * 60_000L)
+            // Tell the sender's UI a browser device is waiting
+            context.sendBroadcast(Intent(ACTION_RECEIVER_READY).apply {
+                putExtra("sessionId",    sessionId)
+                putExtra("receiverName", receiverName)
+            })
+            Log.d(TAG, "Browser receiver ready: $receiverName ($sessionId)")
+            newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"ok":true,"sessionId":"$sessionId","senderName":"$deviceName"}""")
+        } catch (e: Exception) {
+            Log.e(TAG, "receiver-ready error", e)
+            newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", e.message ?: "error")
+        }
+    }
+
+    private fun handlePendingReceivers(): Response {
+        val arr = JSONArray()
+        browserSessions.forEach { (id, sess) ->
+            if (sess.files.isEmpty()) {  // only show receivers still waiting for files
+                arr.put(JSONObject().apply {
+                    put("sessionId",    id)
+                    put("receiverName", sess.receiverName)
+                })
+            }
+        }
+        return newFixedLengthResponse(Response.Status.OK, "application/json",
+            JSONObject().apply { put("receivers", arr) }.toString())
+    }
+
+    private fun handleUploadForSession(session: IHTTPSession): Response {
+        val h          = session.headers
+        val filename   = decode(h["x-filename"]   ?: "file")
+        val filetype   = h["x-filetype"]          ?: "application/octet-stream"
+        val sessionId  = h["x-session-id"]        ?: ""
+        val bSession   = browserSessions[sessionId]
+            ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Session not found")
+
+        return try {
+            val out   = java.io.ByteArrayOutputStream()
+            val buf   = ByteArray(64 * 1024)
+            var n: Int
+            while (session.inputStream.read(buf).also { n = it } != -1) {
+                out.write(buf, 0, n)
+            }
+            val data   = out.toByteArray()
+            val fileId = generateId()
+            bSession.files.add(StoredFile(fileId, filename, data.size.toLong(), filetype, data))
+            Log.d(TAG, "File stored for browser session $sessionId: $filename (${data.size} B)")
+            newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"ok":true,"fileId":"$fileId"}""")
+        } catch (e: Exception) {
+            Log.e(TAG, "upload-for-session error", e)
+            newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", e.message ?: "error")
+        }
+    }
+
+    private fun handleFilesForSession(sessionId: String): Response {
+        val bSession = browserSessions[sessionId]
+            ?: return newFixedLengthResponse(Response.Status.OK, "application/json", """{"files":[]}""")
+        val arr = JSONArray()
+        bSession.files.forEach { f ->
+            arr.put(JSONObject().apply {
+                put("fileId", f.fileId)
+                put("name",   f.name)
+                put("size",   f.size)
+                put("type",   f.type)
+            })
+        }
+        return newFixedLengthResponse(Response.Status.OK, "application/json",
+            JSONObject().apply { put("files", arr) }.toString())
+    }
+
+    private fun handleDownloadForSession(sessionId: String, fileId: String): Response {
+        val bSession = browserSessions[sessionId]
+            ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Session not found")
+        val file = bSession.files.find { it.fileId == fileId }
+            ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "File not found")
+        // Remove after delivery
+        bSession.files.remove(file)
+        val res = newFixedLengthResponse(Response.Status.OK, file.type,
+            file.data.inputStream(), file.data.size.toLong())
+        res.addHeader("Content-Disposition", "attachment; filename=\"${encode(file.name)}\"")
+        res.addHeader("Cache-Control", "no-store")
+        return res
+    }
+
     fun getServerUrl(): String = "http://${getLocalIp()}:$PORT"
 
     companion object {
         const val TAG                     = "BeamLanServer"
         const val PORT                    = 7777
         const val ACTION_INCOMING_REQUEST = "com.beam.app.INCOMING_REQUEST"
+        const val ACTION_RECEIVER_READY   = "com.beam.app.RECEIVER_READY"
     }
 }

@@ -118,6 +118,21 @@ class MainActivity : AppCompatActivity(), BeamWebInterface.BlazeHost {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
 
+                // ── Browser receiver ready (QR flow) ─────────────────────────
+                // A browser device scanned the QR code and registered as a
+                // receiver — notify JS so sender sees them in the device list
+                BeamLanServer.ACTION_RECEIVER_READY -> {
+                    val sessionId    = intent.getStringExtra("sessionId")    ?: return
+                    val receiverName = intent.getStringExtra("receiverName") ?: "Browser"
+                    runOnUiThread {
+                        webView.evaluateJavascript(
+                            "window.onBrowserReceiverReady && " +
+                            "window.onBrowserReceiverReady(${jsonStr(sessionId)},${jsonStr(receiverName)});",
+                            null
+                        )
+                    }
+                }
+
                 // ── Incoming transfer request from another device ─────────────
                 BeamLanServer.ACTION_INCOMING_REQUEST -> {
                     val sessionId  = intent.getStringExtra("sessionId")  ?: return
@@ -473,6 +488,7 @@ class MainActivity : AppCompatActivity(), BeamWebInterface.BlazeHost {
     private fun registerReceivers() {
         val filter = IntentFilter().apply {
             addAction(BeamLanServer.ACTION_INCOMING_REQUEST)
+            addAction(BeamLanServer.ACTION_RECEIVER_READY)
             addAction(BeamTransferService.ACTION_TRANSFER_COMPLETE)
             addAction(BeamTransferService.ACTION_TRANSFER_PROGRESS)
             addAction(BeamTransferService.ACTION_TRANSFER_FAILED)

@@ -3801,7 +3801,8 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     // Show QR code (Mac: shows URL so Android can connect via browser;
     // Android: shows own URL so others can scan it)
     showOfflineQR();
-    startPendingPoll();  // start polling for incoming requests
+    startPendingPoll();         // poll for incoming send-requests
+    startBrowserReceiverPoll(); // poll for browser receivers (QR scans)
   }
 
   // ── Subnet scan ────────────────────────────────────────────────────────────
@@ -3897,19 +3898,22 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       const isPhone = dev.platform === 'android' || dev.platform === 'ios';
       const item = document.createElement('div');
       item.className = 'offline-device-item';
+      const isBrowserRcv = !!dev.isBrowserReceiver;
       item.innerHTML = `
-        <div class="offline-device-icon-wrap">
+        <div class="offline-device-icon-wrap" style="${isBrowserRcv ? 'background:rgba(99,102,241,.12)' : ''}">
           <svg class="offline-device-icon" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-               stroke-linejoin="round" aria-hidden="true">
+               stroke="${isBrowserRcv ? '#818cf8' : 'currentColor'}" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             ${isPhone
               ? '<rect x="7" y="2" width="10" height="20" rx="2"/><circle cx="12" cy="17.5" r=".8" fill="currentColor" stroke="none"/>'
-              : '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>'}
+              : isBrowserRcv
+                ? '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'
+                : '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>'}
           </svg>
         </div>
         <div class="offline-device-info">
           <div class="offline-device-name">${escHtml(dev.name)}</div>
-          <div class="offline-device-sub">${platformLabel(dev.platform)} · ${dev.ip}</div>
+          <div class="offline-device-sub">${isBrowserRcv ? '🌐 Ready to receive via browser' : platformLabel(dev.platform) + ' · ' + dev.ip}</div>
         </div>
         <span class="offline-device-arrow">›</span>`;
       item.addEventListener('click', () => selectOfflineDevice(dev));
@@ -3922,7 +3926,125 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   }
 
   // ── Select device and start transfer ─────────────────────────────────────
+  // ── Receiver mode: browser scanned QR, wants to receive from sender ─────────
+
+  async function startReceiveFromSender(dev) {
+    showOfflineStep('waiting');
+    document.getElementById('offline-waiting-device').textContent = dev.name;
+    const waitSub = document.getElementById('offline-waiting-sub');
+    if (waitSub) waitSub.textContent =
+      'Registering with ' + dev.name + '… they will see you and can send files.';
+
+    const base   = 'http://' + dev.ip + ':' + LAN_PORT;
+    const myName = (window.BeamNative?.getDeviceName?.()) || navigator.platform || 'Browser';
+
+    try {
+      const r = await fetch(base + '/receiver-ready', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receiverName: myName })
+      });
+      if (!r.ok) throw new Error('Server error ' + r.status);
+      const { sessionId, senderName } = await r.json();
+      window._receiverSessionId = sessionId;
+
+      // Update waiting message
+      if (waitSub) waitSub.textContent =
+        senderName + ' will see you in their device list — ask them to tap your name to send files.';
+
+      // Poll sender for files
+      let sessionPoll = setInterval(async () => {
+        try {
+          const fr = await fetch(base + '/files-for-session/' + sessionId, { cache: 'no-store' });
+          const { files } = await fr.json();
+          if (files && files.length > 0) {
+            clearInterval(sessionPoll);
+            showOfflineStep('transfer');
+            document.getElementById('offline-transfer-device').textContent = senderName || dev.name;
+            setOfflineProgress(0, 'Receiving…');
+            _speedWindow = []; _xferLastBytes = 0;
+
+            for (let i = 0; i < files.length; i++) {
+              const file = files[i];
+              const url  = base + '/download-for-session/' + sessionId + '/' + file.fileId;
+              await downloadSessionFile(url, file.name, file.size, senderName || dev.name, i + 1, files.length);
+            }
+
+            showOfflineStep('success');
+            document.getElementById('offline-success-detail').textContent =
+              'Received ' + files.length + ' file' + (files.length > 1 ? 's' : '') +
+              ' from ' + (senderName || dev.name) + '.';
+            if (typeof showPopup === 'function')
+              showPopup('✅', 'Files received!',
+                files.length + ' file(s) saved to Downloads.', 'success', 5000);
+          }
+        } catch(_) {}
+      }, 1000);
+
+      // Give up after 10 minutes
+      setTimeout(() => { clearInterval(sessionPoll); }, 10 * 60 * 1000);
+
+    } catch(e) {
+      showOfflineStep('fail');
+      document.getElementById('offline-fail-detail').textContent =
+        'Could not connect to sender: ' + (e.message || 'Unknown error');
+    }
+  }
+
+  async function downloadSessionFile(url, filename, totalSize, fromName, fileIdx, totalFiles) {
+    const resp = await fetch(url);
+    if (!resp.ok) return;
+    const contentLen = parseInt(resp.headers.get('content-length') || '0', 10) || totalSize || 0;
+    const reader = resp.body.getReader();
+    const chunks = [];
+    let received = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      window.onNativeTransferProgress(
+        contentLen > 0 ? Math.round(received * 100 / contentLen) : 0,
+        filename, received, contentLen
+      );
+    }
+    const blob   = new Blob(chunks);
+    const blobUrl = URL.createObjectURL(blob);
+    Object.assign(document.createElement('a'), { href: blobUrl, download: filename,
+      style: 'display:none' }).dispatchEvent(new MouseEvent('click', {bubbles:true}));
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+
+    if (isAndroid() && window.BeamNative) {
+      // On Android app, also trigger native download notification
+      try { window.BeamNative.showNotification('File received', filename + ' saved.'); } catch(_) {}
+    }
+  }
+
+  // ── Sender side: show browser receiver when they scan QR ─────────────────────
+  // Called when Android server broadcasts ACTION_RECEIVER_READY,
+  // OR when Mac server sends WebSocket {type:'receiver-ready'}
+  window.onBrowserReceiverReady = function(sessionId, receiverName) {
+    // Add the browser receiver as a virtual device in the device list
+    const browserDev = {
+      ip:        null,
+      sessionId: sessionId,
+      name:      receiverName + ' (browser)',
+      platform:  'browser',
+      port:      LAN_PORT,
+      isBrowserReceiver: true
+    };
+    addDevice(browserDev);
+    if (typeof showPopup === 'function')
+      showPopup('📱', receiverName + ' is ready',
+        'They scanned your QR. Tap their device to send files.', 'info', 6000);
+  };
+
   function selectOfflineDevice(dev) {
+    // ── Receiver mode: scanned sender's QR → receive files from them ─────────
+    if (window._beamReceiverMode) {
+      startReceiveFromSender(dev);
+      return;
+    }
+
     const files = filesToSend;
     if (!files || files.length === 0) {
       if (typeof showPopup === 'function')
@@ -3931,13 +4053,18 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }
 
     selectedDev = dev;
-    // Track receiver so cancel can notify it
     window._currentTransferReceiverIp  = dev.ip;
-    window._currentTransferSessionId   = null;  // set later by service/browser flow
+    window._currentTransferSessionId   = null;
     window._currentXhr                 = null;
 
     document.getElementById('offline-waiting-device').textContent = dev.name;
     showOfflineStep('waiting');
+
+    // ── Browser receiver: sender uploads to own server for session ────────────
+    if (dev.isBrowserReceiver) {
+      startBrowserSessionTransfer(dev, files);
+      return;
+    }
 
     if (isAndroid() && window.BeamNative) {
       // ── Android: hand off to Foreground Service ─────────────────────────
@@ -3970,6 +4097,51 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }
   }
   window.selectOfflineDevice = selectOfflineDevice;
+
+  // ── Session-based transfer: sender uploads to own server for browser receiver ─
+  async function startBrowserSessionTransfer(dev, files) {
+    const ownBase = IS_ELECTRON
+      ? 'http://localhost:' + LAN_PORT
+      : (window.location.hostname ? 'http://' + window.location.hostname + ':' + LAN_PORT : null);
+    if (!ownBase) { showOfflineStep('fail'); return; }
+
+    showOfflineStep('transfer');
+    document.getElementById('offline-transfer-device').textContent = dev.name;
+    setOfflineProgress(0, 'Uploading to session…');
+    _speedWindow = []; _xferLastBytes = 0;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', ownBase + '/upload-for-session');
+          xhr.setRequestHeader('X-Filename',   encodeURIComponent(file.name));
+          xhr.setRequestHeader('X-Filetype',   file.type || 'application/octet-stream');
+          xhr.setRequestHeader('X-Session-Id', dev.sessionId);
+          xhr.upload.onprogress = e => {
+            if (e.lengthComputable)
+              window.onNativeTransferProgress(
+                Math.round(e.loaded * 100 / e.total), file.name, e.loaded, e.total);
+          };
+          xhr.onload  = () => xhr.status < 300 ? resolve() : reject(new Error('HTTP ' + xhr.status));
+          xhr.onerror = () => reject(new Error('Network error'));
+          xhr.send(file);
+        });
+      } catch(e) {
+        showOfflineStep('fail');
+        document.getElementById('offline-fail-detail').textContent = 'Upload failed: ' + e.message;
+        return;
+      }
+    }
+
+    showOfflineStep('success');
+    document.getElementById('offline-success-detail').textContent =
+      'Files ready — ' + dev.name + ' is downloading them now.';
+    if (typeof showPopup === 'function')
+      showPopup('✅', 'Files sent!',
+        dev.name + ' will receive them automatically.', 'success', 5000);
+  }
 
   // ── Browser-side transfer (fetch-based) ───────────────────────────────────
   async function startBrowserTransfer(dev, files) {
@@ -4769,9 +4941,38 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     if (ip) probeDevice(ip);
   };
 
+  // Poll for browser receivers who scanned the QR (sender side only)
+  let browserReceiverPollTimer = null;
+  const seenReceivers = new Set();
+
+  function startBrowserReceiverPoll() {
+    if (isAndroid()) return; // Android gets ACTION_RECEIVER_READY broadcast instead
+    if (browserReceiverPollTimer) clearInterval(browserReceiverPollTimer);
+
+    const base = IS_ELECTRON
+      ? 'http://localhost:' + LAN_PORT
+      : (window.location.hostname ? 'http://' + window.location.hostname + ':' + LAN_PORT : null);
+    if (!base) return;
+
+    browserReceiverPollTimer = setInterval(async () => {
+      try {
+        const r = await fetch(base + '/pending-receivers', { cache: 'no-store' });
+        const { receivers } = await r.json();
+        (receivers || []).forEach(rec => {
+          if (!seenReceivers.has(rec.sessionId)) {
+            seenReceivers.add(rec.sessionId);
+            window.onBrowserReceiverReady(rec.sessionId, rec.receiverName);
+          }
+        });
+      } catch(_) {}
+    }, 2000);
+  }
+
   // Stop pending poll when user leaves offline mode
   window._stopOfflinePoll = function() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (browserReceiverPollTimer) { clearInterval(browserReceiverPollTimer); browserReceiverPollTimer = null; }
+    seenReceivers.clear();
   };
 
 })();
@@ -4833,7 +5034,8 @@ function _processDlQueue() {
   if (!senderIP || !/^\d{1,3}(\.\d{1,3}){3}$/.test(senderIP)) return;
 
   // Store for autoDetectConnection() to pick up
-  window._beamQRConnectIP = senderIP;
+  window._beamQRConnectIP  = senderIP;
+  window._beamReceiverMode = true;  // receiver tapping a device → receive, not send
 
   // Clean the URL bar so sharing the page doesn't re-trigger the flow
   try {
