@@ -4011,8 +4011,19 @@ function startTransfer(selectedIndices) {
 // showSaveFilePicker() MUST be called from a user gesture (button click), so
 // we intercept the Download buttons and open the picker(s) before startTransfer.
 
-const LARGE_FILE_THRESHOLD = 2 * 1024 * 1024 * 1024; // 2 GB
-let streamHandles = {};  // filename → WritableStreamDefaultWriter
+const LARGE_FILE_THRESHOLD    = 2 * 1024 * 1024 * 1024; // 2 GB  — desktop streaming threshold
+const ANDROID_STREAM_THRESHOLD = 500 * 1024 * 1024;      // 500 MB — Android streaming threshold
+const ANDROID_BATCH_SIZE       = 50  * 1024 * 1024;      // 50 MB  — max RAM per batch
+
+let streamHandles = {};  // filename → WritableStreamDefaultWriter (desktop)
+
+// Android chunked-streaming state
+let _aStreamMode       = false;
+let _aStreamSessionId  = null;   // set after /p2p-stream-start responds
+let _aStreamBatch      = [];     // current 50 MB batch
+let _aStreamBatchSize  = 0;
+let _aStreamChunkCount = 0;
+let _aStreamChain      = Promise.resolve();  // serial flush queue
 
 async function openStreamHandles(files, selectedIndices) {
   streamHandles = {};
@@ -4140,6 +4151,15 @@ function startReceiver() {
         currentChunks      = [];
         currentStreamCount = 0;
         bytesReceived      = 0;
+        // Decide streaming mode for this file
+        _aStreamMode      = !!(window.BeamNative &&
+                               msg.size > ANDROID_STREAM_THRESHOLD &&
+                               !('showSaveFilePicker' in window));
+        _aStreamSessionId = null;
+        _aStreamBatch     = [];
+        _aStreamBatchSize = 0;
+        _aStreamChunkCount = 0;
+        _aStreamChain     = Promise.resolve();
         _recvT0        = Date.now();
         _recvLastBytes = 0;
         _recvLastTime  = Date.now();
@@ -4156,8 +4176,42 @@ function startReceiver() {
       } else if (msg?.type === 'chunk') {
         if (!currentMeta) return;
         const writer = streamHandles[currentMeta.name];
-        if (writer) {
-          // Large file — write directly to disk, no RAM accumulation
+
+        if (_aStreamMode) {
+          // ── Android chunked streaming — 50 MB batches, max RAM at any time ──
+          _aStreamChunkCount++;
+          _aStreamBatch.push(msg.data);
+          _aStreamBatchSize += msg.data.byteLength;
+
+          // Initialise stream on very first chunk (one-off)
+          if (_aStreamChunkCount === 1) {
+            const fname = currentMeta.name;
+            _aStreamChain = _aStreamChain.then(async () => {
+              const r = await fetch('http://localhost:7777/p2p-stream-start', {
+                method: 'POST',
+                headers: { 'X-Filename': encodeURIComponent(fname) }
+              });
+              const j = await r.json();
+              _aStreamSessionId = j.sessionId;
+            });
+          }
+
+          // Flush once batch reaches 50 MB
+          if (_aStreamBatchSize >= ANDROID_BATCH_SIZE) {
+            const batch = new Blob(_aStreamBatch);
+            _aStreamBatch = []; _aStreamBatchSize = 0;
+            const sid = () => _aStreamSessionId;   // capture via closure
+            _aStreamChain = _aStreamChain.then(async () => {
+              await fetch(`http://localhost:7777/p2p-stream-append?id=${sid()}`, {
+                method: 'POST', body: batch,
+                headers: { 'Content-Length': String(batch.size),
+                           'Content-Type':   'application/octet-stream' }
+              });
+            });
+          }
+
+        } else if (writer) {
+          // Desktop large-file streaming (File System Access API)
           writer.write(msg.data);
           currentStreamCount++;
         } else {
@@ -4201,12 +4255,57 @@ function startReceiver() {
           incomingMeta.textContent = `${formatBytes(bytesReceived)} of ${formatBytes(currentMeta.size)}`;
         }
 
-        const receivedCount = streamHandles[currentMeta.name]
-          ? currentStreamCount : currentChunks.length;
+        const receivedCount = _aStreamMode ? _aStreamChunkCount :
+                              streamHandles[currentMeta.name] ? currentStreamCount :
+                              currentChunks.length;
 
         if (receivedCount === currentMeta.totalChunks) {
           const meta   = currentMeta;
           const writer = streamHandles[meta.name];
+
+          // Android streaming: flush final batch then finish
+          if (_aStreamMode) {
+            currentMeta = null; currentChunks = []; currentStreamCount = 0;
+            bytesReceived = 0; _aStreamChunkCount = 0;
+
+            if (_aStreamBatch.length > 0) {
+              const lastBatch = new Blob(_aStreamBatch);
+              _aStreamBatch = []; _aStreamBatchSize = 0;
+              const sid = () => _aStreamSessionId;
+              _aStreamChain = _aStreamChain.then(async () => {
+                await fetch(`http://localhost:7777/p2p-stream-append?id=${sid()}`, {
+                  method: 'POST', body: lastBatch,
+                  headers: { 'Content-Length': String(lastBatch.size),
+                             'Content-Type':   'application/octet-stream' }
+                });
+              });
+            }
+
+            _aStreamChain = _aStreamChain.then(async () => {
+              try {
+                const r = await fetch(
+                  `http://localhost:7777/p2p-stream-finish?id=${_aStreamSessionId}`,
+                  { method: 'POST' }
+                );
+                const j = await r.json();
+                recvFill.classList.remove('active');
+                setProgress(recvFill, recvStats, 100);
+                updateRecvSize(meta.size, meta.size);
+                hideIncomingCard();
+                recvProgress.style.display = 'none';
+                setConn('connected', `"${meta.name}" received ✓ — waiting for next…`);
+                addCompletedFileCard(meta, null, false, true /* isStreamed */);
+                conn.send({ type: 'file-done' });
+              } catch(e) {
+                conn.send({ type: 'file-done' }); // still advance sender
+                if (typeof showPopup === 'function')
+                  showPopup('❌', 'Save failed', e.message, 'error', 5000);
+              }
+              _aStreamMode = false; _aStreamSessionId = null;
+            });
+
+            return; // skip the rest — handled above
+          }
 
           // UI reset (same for both paths)
           recvFill.classList.remove('active');

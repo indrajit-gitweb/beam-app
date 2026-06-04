@@ -52,6 +52,17 @@ class BeamLanServer(
         val createdAt:  Long = System.currentTimeMillis()
     )
 
+    // ── P2P large-file stream sessions ────────────────────────────────────────
+    // Receiver batches WebRTC chunks (50 MB at a time) and POSTs each batch here.
+    // Server appends each batch to a temp file — max 50 MB RAM used at any time.
+    data class P2PStreamSession(
+        val sessionId: String,
+        val filename: String,
+        val tempFile: File,
+        val fos: FileOutputStream
+    )
+    private val p2pStreams = ConcurrentHashMap<String, P2PStreamSession>()
+
     // ── Browser receiver sessions (QR flow) ────────────────────────────────────
     // When a browser device scans the QR it calls /receiver-ready and gets a
     // sessionId. The sender sees this device and uploads files for that session.
@@ -174,9 +185,16 @@ class BeamLanServer(
         }
 
         // P2P receiver fallback: JS POSTs a blob → server saves to Downloads
-        // Used when Android WebView can't download blob: URLs via a.click()
         if (uri == "/save-to-downloads" && method == Method.POST)
             return cors(handleSaveToDownloads(session))
+
+        // P2P large-file chunked streaming (no RAM limit)
+        if (uri == "/p2p-stream-start" && method == Method.POST)
+            return cors(handleP2PStreamStart(session))
+        if (uri.startsWith("/p2p-stream-append") && method == Method.POST)
+            return cors(handleP2PStreamAppend(session, parseQueryParam(uri, "id")))
+        if (uri.startsWith("/p2p-stream-finish") && (method == Method.POST || method == Method.GET))
+            return cors(handleP2PStreamFinish(parseQueryParam(uri, "id")))
 
         // Serve app
         if (uri == "/" || uri == "/index.html" || uri.isEmpty())
@@ -671,6 +689,87 @@ class BeamLanServer(
         res.addHeader("Access-Control-Expose-Headers", "Content-Length")
         mainHandler.postDelayed({ file.tempFile.delete() }, 5000)
         return res
+    }
+
+    // ── P2P large-file stream handlers ────────────────────────────────────────
+
+    private fun parseQueryParam(uri: String, key: String): String =
+        uri.substringAfter("?", "").split("&")
+            .firstOrNull { it.startsWith("$key=") }?.removePrefix("$key=") ?: ""
+
+    private fun handleP2PStreamStart(session: IHTTPSession): Response {
+        val filename = decode(session.headers["x-filename"] ?: "beam-file")
+        val sessionId = generateId()
+        val tempFile  = File(context.cacheDir, "p2p_stream_$sessionId")
+        return try {
+            val fos = FileOutputStream(tempFile)
+            p2pStreams[sessionId] = P2PStreamSession(sessionId, filename, tempFile, fos)
+            // Auto-expire after 2 hours (should be done long before then)
+            mainHandler.postDelayed({
+                p2pStreams.remove(sessionId)?.let { s ->
+                    try { s.fos.close() } catch (_: Exception) {}
+                    s.tempFile.delete()
+                }
+            }, 2 * 60 * 60_000L)
+            Log.d(TAG, "P2P stream started: $filename ($sessionId)")
+            newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"ok":true,"sessionId":"$sessionId"}""")
+        } catch (e: Exception) {
+            Log.e(TAG, "p2p-stream-start error: ${e.message}")
+            newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", e.message ?: "error")
+        }
+    }
+
+    private fun handleP2PStreamAppend(session: IHTTPSession, sessionId: String): Response {
+        val s = p2pStreams[sessionId]
+            ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Session not found")
+        val contentLen = session.headers["content-length"]?.toLongOrNull() ?: 0L
+        return try {
+            val buf = ByteArray(64 * 1024)
+            var n: Int; var written = 0L
+            if (contentLen > 0) {
+                var remaining = contentLen
+                while (remaining > 0) {
+                    val toRead = minOf(buf.size.toLong(), remaining).toInt()
+                    n = session.inputStream.read(buf, 0, toRead)
+                    if (n == -1) break
+                    s.fos.write(buf, 0, n); written += n; remaining -= n
+                }
+            }
+            Log.d(TAG, "P2P stream append: $written B → ${s.filename}")
+            newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"ok":true,"written":$written}""")
+        } catch (e: Exception) {
+            Log.e(TAG, "p2p-stream-append error: ${e.message}")
+            newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", e.message ?: "error")
+        }
+    }
+
+    private fun handleP2PStreamFinish(sessionId: String): Response {
+        val s = p2pStreams.remove(sessionId)
+            ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Session not found")
+        return try {
+            s.fos.flush(); s.fos.close()
+            // Move temp file to Downloads with proper name
+            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val safe = s.filename.replace(Regex("[/\\\\?%*:|\"<>]"), "_")
+            var dest = File(downloadsDir, safe)
+            var i = 1
+            while (dest.exists()) {
+                val ext  = if (safe.contains('.')) ".${safe.substringAfterLast('.')}" else ""
+                val base = if (safe.contains('.')) safe.substringBeforeLast('.') else safe
+                dest = File(downloadsDir, "${base}_($i)$ext"); i++
+            }
+            s.tempFile.renameTo(dest)
+            Log.d(TAG, "P2P stream finished: ${dest.absolutePath} (${dest.length()} B)")
+            BeamNotificationHelper.showComplete(context, "Received ${dest.name}", "Saved to Downloads")
+            newFixedLengthResponse(Response.Status.OK, "application/json",
+                """{"ok":true,"saved":"${dest.name}","size":${dest.length()}}""")
+        } catch (e: Exception) {
+            Log.e(TAG, "p2p-stream-finish error: ${e.message}")
+            s.tempFile.delete()
+            newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", e.message ?: "error")
+        }
     }
 
     /** Cancel a QR session download in progress (marks it so ProgressInputStream throws) */
