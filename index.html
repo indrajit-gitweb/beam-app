@@ -340,8 +340,18 @@
     .cfi-info { flex: 1; min-width: 0; }
     .cfi-name { font-size: .84rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .cfi-meta { font-size: .72rem; color: var(--muted); margin-top: 2px; }
-    .cfi-download { display: flex; align-items: center; gap: 5px; padding: 6px 12px; background: var(--success); color: #fff; border-radius: 7px; text-decoration: none; font-size: .78rem; font-weight: 700; flex-shrink: 0; transition: opacity .15s, transform .1s; }
+    .cfi-download { display: flex; align-items: center; gap: 5px; padding: 6px 12px; background: var(--success); color: #fff; border-radius: 7px; border: none; text-decoration: none; font-size: .78rem; font-weight: 700; flex-shrink: 0; cursor: pointer; transition: opacity .15s, transform .1s; }
     .cfi-download:hover { opacity: .88; transform: translateY(-1px); }
+    .cfi-download.downloaded { background: rgba(34,197,94,.12); color: #34d399; border: 1px solid rgba(34,197,94,.3); cursor: default; transform: none !important; opacity: 1 !important; }
+    .cfi-download.retry { background: transparent; color: var(--muted); border: 1px solid var(--border); font-size: .72rem; cursor: pointer; }
+    .cfi-download.retry:hover { border-color: var(--success); color: #34d399; }
+    .cfi-retry-confirm { display: none; margin-top: 6px; font-size: .72rem; color: var(--muted-2); gap: 6px; align-items: center; flex-wrap: wrap; }
+    .cfi-retry-confirm.show { display: flex; }
+    .cfi-retry-yes  { padding: 3px 10px; border-radius: 5px; border: 1px solid rgba(34,197,94,.4); background: rgba(34,197,94,.08); color: #34d399; font-size: .72rem; font-weight: 700; cursor: pointer; }
+    .cfi-retry-no   { padding: 3px 10px; border-radius: 5px; border: 1px solid var(--border); background: transparent; color: var(--muted); font-size: .72rem; cursor: pointer; }
+    /* All-done banner */
+    .recv-all-done { display: none; margin-top: 10px; padding: 10px 14px; border-radius: var(--radius-sm); background: rgba(34,197,94,.08); border: 1px solid rgba(34,197,94,.25); color: #34d399; font-size: .82rem; font-weight: 600; text-align: center; }
+    .recv-all-done.show { display: block; }
 
     /* ── Save All button (post-transfer) ── */
     #save-all-wrap { display: none; margin-top: 10px; }
@@ -1616,6 +1626,11 @@
       <!-- Completed files -->
       <div id="completed-files"></div>
 
+      <!-- All-done banner — shown when every received file has been downloaded -->
+      <div class="recv-all-done" id="recv-all-done">
+        ✅ All files downloaded to your device
+      </div>
+
       <!-- Save All (post-transfer, shown when >1 file received) -->
       <div id="save-all-wrap">
         <button id="save-all-btn">💾 Save All to Device</button>
@@ -2648,6 +2663,17 @@ function hideIncomingCard() {
   recvProgress.style.display = 'none';
 }
 
+// Tracks which files in this P2P session have been downloaded at least once
+const _p2pDownloaded = new Set();
+
+function _checkAllDownloaded() {
+  const cards = completedFiles.querySelectorAll('.completed-file-item:not(.skipped)');
+  if (cards.length === 0) return;
+  const allDone = Array.from(cards).every(c => c.dataset.downloaded === 'true');
+  const banner  = document.getElementById('recv-all-done');
+  if (banner) banner.classList.toggle('show', allDone);
+}
+
 function addCompletedFileCard(meta, blob, skipped = false) {
   const item = document.createElement('div');
   item.className = 'completed-file-item' + (skipped ? ' skipped' : '');
@@ -2658,7 +2684,8 @@ function addCompletedFileCard(meta, blob, skipped = false) {
 
   const info = document.createElement('div');
   info.className = 'cfi-info';
-  info.innerHTML = `<div class="cfi-name">${meta.name}</div><div class="cfi-meta">${formatBytes(meta.size)}${skipped ? ' · skipped' : ' · received'}</div>`;
+  info.innerHTML = `<div class="cfi-name">${escHtml ? escHtml(meta.name) : meta.name}</div>
+    <div class="cfi-meta">${formatBytes(meta.size)}${skipped ? ' · skipped' : ' · received'}</div>`;
 
   item.appendChild(icon);
   item.appendChild(info);
@@ -2667,12 +2694,71 @@ function addCompletedFileCard(meta, blob, skipped = false) {
     const objUrl = URL.createObjectURL(blob);
     receivedBlobLinks.push({ name: meta.name, blob });
 
-    const dl = document.createElement('a');
-    dl.className = 'cfi-download';
-    dl.href = objUrl;
-    dl.download = meta.name;
-    dl.innerHTML = '⬇ Download';
-    item.appendChild(dl);
+    // ── Download button with Option B tracking ────────────────────────────
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0';
+
+    const btn = document.createElement('button');
+    btn.className = 'cfi-download';
+    btn.innerHTML = '⬇ Download';
+
+    // Inline "Already saved — download again?" prompt
+    const confirm = document.createElement('div');
+    confirm.className = 'cfi-retry-confirm';
+    confirm.innerHTML =
+      '<span>Already saved —</span>' +
+      '<button class="cfi-retry-yes">Download again</button>' +
+      '<button class="cfi-retry-no">Cancel</button>';
+
+    btn.addEventListener('click', () => {
+      if (btn.dataset.downloaded !== 'true') {
+        // ── First download ───────────────────────────────────────────────
+        const a = Object.assign(document.createElement('a'),
+          { href: objUrl, download: meta.name, style: 'display:none' });
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        btn.innerHTML    = '✓ Downloaded';
+        btn.className    = 'cfi-download downloaded';
+        btn.title        = 'Click to download again';
+        item.dataset.downloaded = 'true';
+        btn.dataset.downloaded  = 'true';
+        _p2pDownloaded.add(meta.name);
+        _checkAllDownloaded();
+
+        // After a moment, turn into a subtle retry button
+        setTimeout(() => {
+          btn.innerHTML = '↓ Download again';
+          btn.className = 'cfi-download retry';
+        }, 2000);
+
+      } else {
+        // ── Already downloaded — show confirmation ───────────────────────
+        confirm.classList.toggle('show');
+      }
+    });
+
+    confirm.querySelector('.cfi-retry-yes').addEventListener('click', () => {
+      const a = Object.assign(document.createElement('a'),
+        { href: objUrl, download: meta.name, style: 'display:none' });
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      confirm.classList.remove('show');
+      btn.innerHTML = '✓ Downloaded';
+      btn.className = 'cfi-download downloaded';
+      setTimeout(() => { btn.innerHTML = '↓ Download again'; btn.className = 'cfi-download retry'; }, 2000);
+    });
+
+    confirm.querySelector('.cfi-retry-no').addEventListener('click', () => {
+      confirm.classList.remove('show');
+    });
+
+    wrap.appendChild(btn);
+    wrap.appendChild(confirm);
+    item.appendChild(wrap);
+
   } else if (skipped) {
     const tag = document.createElement('span');
     tag.style.cssText = 'font-size:.72rem;color:var(--muted);font-weight:600;';
@@ -3792,6 +3878,9 @@ function startReceiver() {
   if (receiverPeer) { receiverPeer.destroy(); receiverPeer = null; }
   activeRecvConn = null;
   receivedBlobLinks = [];
+  _p2pDownloaded.clear();
+  const _banner = document.getElementById('recv-all-done');
+  if (_banner) _banner.classList.remove('show');
 
   hideIncomingCard();
   recvProgress.style.display  = 'none';
