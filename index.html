@@ -5344,12 +5344,10 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     pendingSessionId    = null;
     window._offlinePendingSessionId  = null;
     window._pendingBrowserSession    = null;
-    // _beamQRConnectIP intentionally NOT cleared — autoDetectConnection needs it.
-    // _beamReceiverMode cleared here: once a QR session is fully done and the
-    // user hits reset/send-another, they must be back in sender mode.
-    window._beamReceiverMode         = false;
-    window._receiverSessionId        = null;
-    window._beamQRSenderBase         = null;
+    // NOTE: _beamReceiverMode and _beamQRConnectIP are intentionally NOT
+    // cleared here — autoDetectConnection() needs _beamQRConnectIP for the
+    // fast-path, and _beamReceiverMode must survive until the user explicitly
+    // resets. Both are cleared in doAppReset() and proceedSendAnother().
     const qrBox = document.getElementById('offline-android-box');
     if (qrBox) { delete qrBox.dataset.qrRendered; qrBox.style.display = 'none'; }
     setOfflineProgress(0, 'Sending…');
