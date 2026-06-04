@@ -4671,6 +4671,26 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     const receiverIp = window._currentTransferReceiverIp;
     const sessionId  = window._currentTransferSessionId;
 
+    // ── QR session receiver cancel ────────────────────────────────────────
+    // Receiver is on offline-step-transfer showing "Receiving from X"
+    // _receiverSessionId is set, _pendingBrowserSession is NOT (that's sender)
+    if (window._receiverSessionId) {
+      if (window._sessionDownloadAbort) {
+        window._sessionDownloadAbort.abort();
+        window._sessionDownloadAbort = null;
+      }
+      const senderBase = window._beamQRSenderBase || '';
+      if (senderBase) {
+        fetch(senderBase + '/cancel-session/' + window._receiverSessionId, { method: 'POST' })
+          .catch(() => {});
+      }
+      window._receiverSessionId = null;
+      _resetProgressUI();
+      document.getElementById('offline-fail-detail').textContent = 'Transfer cancelled.';
+      showOfflineStep('fail');
+      return;
+    }
+
     // ── QR browser session cancel (sender side) ───────────────────────────
     const bSession = window._pendingBrowserSession;
     if (bSession) {
