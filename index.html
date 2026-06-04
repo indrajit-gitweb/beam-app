@@ -2677,7 +2677,7 @@ function _checkAllDownloaded() {
   if (banner) banner.classList.toggle('show', allDone);
 }
 
-function addCompletedFileCard(meta, blob, skipped = false) {
+function addCompletedFileCard(meta, blob, skipped = false, isStreamed = false) {
   const item = document.createElement('div');
   item.className = 'completed-file-item' + (skipped ? ' skipped' : '');
 
@@ -2695,7 +2695,13 @@ function addCompletedFileCard(meta, blob, skipped = false) {
   item.appendChild(icon);
   item.appendChild(info);
 
-  if (!skipped && blob) {
+  if (isStreamed) {
+    // File was saved directly to disk via File System Access API — no download button needed
+    const saved = document.createElement('span');
+    saved.style.cssText = 'font-size:.76rem;color:var(--success);font-weight:600;flex-shrink:0';
+    saved.innerHTML = '✓ Saved to disk';
+    item.appendChild(saved);
+  } else if (!skipped && blob) {
     const objUrl = URL.createObjectURL(blob);
     receivedBlobLinks.push({ name: meta.name, blob });
 
@@ -3953,6 +3959,22 @@ function showManifestPreview(files) {
     manifestFileList.appendChild(item);
   });
 
+  // Warn if large files present but File System Access API unavailable
+  const hasLarge = files.some(f => f.size > LARGE_FILE_THRESHOLD);
+  const existingWarn = document.getElementById('manifest-large-warn');
+  if (existingWarn) existingWarn.remove();
+  if (hasLarge) {
+    const warn = document.createElement('div');
+    warn.id = 'manifest-large-warn';
+    warn.style.cssText = 'font-size:.72rem;color:var(--warn);margin-top:8px;line-height:1.5;';
+    if ('showSaveFilePicker' in window) {
+      warn.textContent = '⚡ Large file detected (>2 GB). You\'ll be asked to choose a save location before the transfer starts — this allows it to stream directly to disk with no RAM limit.';
+    } else {
+      warn.textContent = '⚠️ Large file detected (>2 GB). Your browser doesn\'t support disk streaming — the file will load into RAM. Use Chrome or Edge for large file support.';
+    }
+    manifestFileList.after(warn);
+  }
+
   updateManifestSelBtn();
   manifestPreview.style.display = 'block';
 }
@@ -3984,18 +4006,51 @@ function startTransfer(selectedIndices) {
   activeRecvConn.send(payload);
 }
 
-manifestDlAll.addEventListener('click', () => {
+// ── Large-file streaming via File System Access API ───────────────────────────
+// Files > 2 GB are streamed directly to disk chunk-by-chunk — no RAM required.
+// showSaveFilePicker() MUST be called from a user gesture (button click), so
+// we intercept the Download buttons and open the picker(s) before startTransfer.
+
+const LARGE_FILE_THRESHOLD = 2 * 1024 * 1024 * 1024; // 2 GB
+let streamHandles = {};  // filename → WritableStreamDefaultWriter
+
+async function openStreamHandles(files, selectedIndices) {
+  streamHandles = {};
+  if (!('showSaveFilePicker' in window)) return;  // API not available — fall back to RAM
+  const toCheck = selectedIndices === null
+    ? files
+    : files.filter((_, i) => selectedIndices.has(i));
+  for (const f of toCheck) {
+    if (f.size <= LARGE_FILE_THRESHOLD) continue;
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: f.name,
+        types: [{ description: 'File',
+                  accept: { [f.fileType || 'application/octet-stream']: [] } }]
+      });
+      streamHandles[f.name] = (await handle.createWritable()).getWriter();
+    } catch(e) {
+      // User cancelled picker — file will fall back to RAM mode
+      console.warn('[beam] stream picker cancelled for', f.name);
+    }
+  }
+}
+
+manifestDlAll.addEventListener('click', async () => {
   if (!activeRecvConn) return;
+  await openStreamHandles(manifestData, null);
   startTransfer(null);
 });
 
-manifestDlSel.addEventListener('click', () => {
+manifestDlSel.addEventListener('click', async () => {
   if (!activeRecvConn) return;
   const selected = new Set(
     manifestCheckboxes.map((cb, i) => cb.checked ? i : -1).filter(i => i >= 0)
   );
   if (selected.size === 0) return;
-  startTransfer(selected.size === manifestData.length ? null : selected);
+  const indices = selected.size === manifestData.length ? null : selected;
+  await openStreamHandles(manifestData, indices);
+  startTransfer(indices);
 });
 
 // ── Start receiver ────────────────────────────────────────────────────────────
@@ -4013,6 +4068,7 @@ function startReceiver() {
   activeRecvConn = null;
   receivedBlobLinks = [];
   _p2pDownloaded.clear();
+  streamHandles = {};   // close any leftover stream handles from previous session
   const _banner = document.getElementById('recv-all-done');
   if (_banner) _banner.classList.remove('show');
 
@@ -4063,9 +4119,10 @@ function startReceiver() {
     });
 
     // Per-file state
-    let currentMeta    = null;
-    let currentChunks  = [];
-    let bytesReceived  = 0;
+    let currentMeta         = null;
+    let currentChunks       = [];
+    let currentStreamCount  = 0;   // chunk counter for streaming mode (no array)
+    let bytesReceived       = 0;
     // Speed tracking on receiver side
     let _recvT0        = 0;
     let _recvLastBytes = 0;
@@ -4079,9 +4136,10 @@ function startReceiver() {
         setConn('connected', `${msg.files.length} file${msg.files.length!==1?'s':''} ready — choose what to download`);
 
       } else if (msg?.type === 'meta') {
-        currentMeta    = msg;
-        currentChunks  = [];
-        bytesReceived  = 0;
+        currentMeta        = msg;
+        currentChunks      = [];
+        currentStreamCount = 0;
+        bytesReceived      = 0;
         _recvT0        = Date.now();
         _recvLastBytes = 0;
         _recvLastTime  = Date.now();
@@ -4097,10 +4155,17 @@ function startReceiver() {
 
       } else if (msg?.type === 'chunk') {
         if (!currentMeta) return;
-        currentChunks.push(msg.data);
+        const writer = streamHandles[currentMeta.name];
+        if (writer) {
+          // Large file — write directly to disk, no RAM accumulation
+          writer.write(msg.data);
+          currentStreamCount++;
+        } else {
+          currentChunks.push(msg.data);
+        }
         bytesReceived += msg.data.byteLength;
 
-        if (currentChunks.length === 1) {
+        if ((writer ? currentStreamCount : currentChunks.length) === 1) {
           showIncomingCard(currentMeta.name, currentMeta.size, currentMeta.fileType, true);
           incomingCard.classList.remove('pulsing');
           incomingCard.classList.add('arriving');
@@ -4136,20 +4201,41 @@ function startReceiver() {
           incomingMeta.textContent = `${formatBytes(bytesReceived)} of ${formatBytes(currentMeta.size)}`;
         }
 
-        if (currentChunks.length === currentMeta.totalChunks) {
-          const blob = reassembleChunks(currentChunks, { type: currentMeta.fileType });
-          addCompletedFileCard(currentMeta, blob, false);
+        const receivedCount = streamHandles[currentMeta.name]
+          ? currentStreamCount : currentChunks.length;
 
+        if (receivedCount === currentMeta.totalChunks) {
+          const meta   = currentMeta;
+          const writer = streamHandles[meta.name];
+
+          // UI reset (same for both paths)
           recvFill.classList.remove('active');
           setProgress(recvFill, recvStats, 100);
-          updateRecvSize(currentMeta.size, currentMeta.size);
+          updateRecvSize(meta.size, meta.size);
           hideIncomingCard();
           recvProgress.style.display = 'none';
+          setConn('connected', `"${meta.name}" received ✓ — waiting for next…`);
 
-          setConn('connected', `"${currentMeta.name}" received ✓ — waiting for next…`);
-          conn.send({ type: 'file-done' });
+          // Reset per-file state immediately
+          currentMeta = null; currentChunks = []; currentStreamCount = 0; bytesReceived = 0;
 
-          currentMeta = null; currentChunks = []; bytesReceived = 0;
+          if (writer) {
+            // Flush + close the stream, then notify sender
+            delete streamHandles[meta.name];
+            writer.close().then(() => {
+              addCompletedFileCard(meta, null, false, true /* isStreamed */);
+              conn.send({ type: 'file-done' });
+            }).catch(e => {
+              addCompletedFileCard(meta, null, true); // mark skipped on error
+              conn.send({ type: 'file-done' });
+              if (typeof showPopup === 'function')
+                showPopup('❌', 'Save failed', e.message, 'error', 5000);
+            });
+          } else {
+            const blob = reassembleChunks(currentChunks, { type: meta.fileType });
+            addCompletedFileCard(meta, blob, false);
+            conn.send({ type: 'file-done' });
+          }
         }
 
       } else if (msg?.type === 'all-done') {
