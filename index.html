@@ -2774,40 +2774,50 @@ function addCompletedFileCard(meta, blob, skipped = false) {
 
 // ── Save All ──────────────────────────────────────────────────────────────────
 
-saveAllBtn.addEventListener('click', () => {
-  receivedBlobLinks.forEach(({ name, blob }, i) => {
-    setTimeout(() => {
-      // Download the file
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+// async/await preserves the browser's user-gesture context through promise chains,
+// so every a.click() below is treated as a direct user action — no download blocking.
+saveAllBtn.addEventListener('click', async () => {
+  saveAllBtn.disabled = true;
+  saveAllBtn.textContent = 'Saving…';
 
-      // Update the matching button state (same logic as individual download)
-      const btn = completedFiles.querySelector(`button[data-filename="${CSS.escape(name)}"]`);
-      if (btn && btn.dataset.downloaded !== 'true') {
-        btn.innerHTML = '✓ Downloaded';
-        btn.className = 'cfi-download downloaded';
-        btn.dataset.downloaded = 'true';
-        const item = btn.closest('.completed-file-item');
-        if (item) item.dataset.downloaded = 'true';
-        _p2pDownloaded.add(name);
-        // Fade to retry button after a moment
-        setTimeout(() => {
-          if (btn.dataset.downloaded === 'true') {
-            btn.innerHTML = '↓ Download again';
-            btn.className = 'cfi-download retry';
-          }
-        }, 2000);
-      }
-    }, i * 400);
-  });
+  for (let i = 0; i < receivedBlobLinks.length; i++) {
+    const { name, blob } = receivedBlobLinks[i];
 
-  // Check all-done banner after last file state updates
-  setTimeout(() => _checkAllDownloaded(), receivedBlobLinks.length * 400 + 2500);
+    // Trigger download — gesture is still active because we're in an async chain
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'),
+      { href: url, download: name, style: 'display:none' });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+
+    // Update button state for this file
+    const btn = completedFiles.querySelector(`button[data-filename="${CSS.escape(name)}"]`);
+    if (btn && btn.dataset.downloaded !== 'true') {
+      btn.innerHTML = '✓ Downloaded';
+      btn.className = 'cfi-download downloaded';
+      btn.dataset.downloaded = 'true';
+      const item = btn.closest('.completed-file-item');
+      if (item) item.dataset.downloaded = 'true';
+      _p2pDownloaded.add(name);
+      setTimeout(() => {
+        if (btn.dataset.downloaded === 'true') {
+          btn.innerHTML = '↓ Download again';
+          btn.className = 'cfi-download retry';
+        }
+      }, 1500);
+    }
+
+    // Short pause before next file — keeps gesture context alive via await
+    if (i < receivedBlobLinks.length - 1) {
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+
+  saveAllBtn.disabled = false;
+  saveAllBtn.innerHTML = `💾 Save All ${receivedBlobLinks.length} Files to Device`;
+  _checkAllDownloaded();
 });
 
 // ── Sender: file queue management ─────────────────────────────────────────────
