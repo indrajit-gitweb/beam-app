@@ -778,6 +778,13 @@
     .offline-success-detail { font-size: .78rem; color: var(--muted-2); line-height: 1.6; margin-bottom: 18px; }
     .offline-success-again { background: rgba(16,185,129,.1); border: 1px solid rgba(16,185,129,.3); color: #34d399; border-radius: 8px; padding: 8px 20px; font-size: .82rem; font-weight: 600; cursor: pointer; transition: background .15s; }
     .offline-success-again:hover { background: rgba(16,185,129,.18); }
+    .clear-countdown-msg { font-size: .76rem; color: var(--muted); margin-bottom: 12px; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+    .clear-countdown-msg strong { color: #fbbf24; font-size: .88rem; }
+    .clear-keep-btn { font-size: .72rem; padding: 3px 10px; border-radius: 5px; border: 1px solid rgba(251,191,36,.35); background: rgba(251,191,36,.07); color: #fbbf24; cursor: pointer; transition: background .15s; }
+    .clear-keep-btn:hover { background: rgba(251,191,36,.15); }
+    .success-action-row { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 4px; }
+    .offline-resend-btn { background: rgba(99,102,241,.1); border: 1px solid rgba(99,102,241,.3); color: #818cf8; border-radius: 8px; padding: 8px 16px; font-size: .82rem; font-weight: 600; cursor: pointer; transition: background .15s; }
+    .offline-resend-btn:hover { background: rgba(99,102,241,.18); }
 
     /* Fail state */
     .offline-fail-wrap { text-align: center; padding: 20px 0 8px; }
@@ -1026,6 +1033,18 @@
     <div class="lan-retry-actions">
       <button class="lan-retry-all-btn" onclick="retryAllFailedDownloads()">🔄 Retry all failed</button>
       <button class="lan-retry-dismiss-btn" onclick="dismissRetrySection()">Dismiss</button>
+    </div>
+  </div>
+</div>
+
+<!-- "Send Another" confirmation overlay -->
+<div id="send-another-confirm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px" hidden>
+  <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:20px 24px;max-width:300px;width:100%;text-align:center">
+    <div style="font-size:.95rem;font-weight:700;color:var(--text);margin-bottom:8px">Start a new transfer?</div>
+    <div style="font-size:.76rem;color:var(--muted-2);margin-bottom:18px;line-height:1.5">Current files will be cleared.<br>You'll pick new files from your device.</div>
+    <div style="display:flex;gap:8px;justify-content:center">
+      <button onclick="cancelSendAnother()" style="flex:1;padding:9px;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:.82rem;cursor:pointer">Cancel</button>
+      <button onclick="proceedSendAnother()" style="flex:1;padding:9px;border-radius:7px;border:none;background:rgba(16,185,129,.15);color:#34d399;font-weight:700;font-size:.82rem;cursor:pointer">Yes, pick files</button>
     </div>
   </div>
 </div>
@@ -1304,13 +1323,31 @@
             <div class="offline-success-icon">✅</div>
             <div class="offline-success-title">Transfer Complete!</div>
             <div class="offline-success-detail" id="offline-success-detail">Files sent successfully.</div>
-            <!-- Guidance shown when HTTP fallback was used -->
-            <div class="transfer-guidance-box" id="transfer-guidance-box" style="display:none">
-              <div class="tg-title">⚡ Get faster transfers next time</div>
-              <div class="tg-reason" id="tg-reason"></div>
-              <div class="tg-fix" id="tg-fix"></div>
+
+            <!-- 9-second countdown before auto-clear (QR session only) -->
+            <div id="offline-clear-countdown" style="display:none">
+              <div class="clear-countdown-msg">
+                Files will be cleared in <strong id="clear-countdown-secs">9</strong>s
+                <button class="clear-keep-btn" onclick="keepFilesAfterTransfer()">Keep files</button>
+              </div>
+              <div class="success-action-row">
+                <button class="offline-resend-btn" id="offline-resend-btn"
+                        onclick="resendSameFiles()">↺ Resend same files</button>
+                <button class="offline-success-again"
+                        onclick="confirmSendAnother()">＋ Send Another</button>
+              </div>
             </div>
-            <button class="offline-success-again" onclick="resetOfflineMode()">Send Another</button>
+
+            <!-- Normal success buttons (non-QR or after countdown expires) -->
+            <div id="offline-success-normal-btns">
+              <!-- Guidance shown when HTTP fallback was used -->
+              <div class="transfer-guidance-box" id="transfer-guidance-box" style="display:none">
+                <div class="tg-title">⚡ Get faster transfers next time</div>
+                <div class="tg-reason" id="tg-reason"></div>
+                <div class="tg-fix" id="tg-fix"></div>
+              </div>
+              <button class="offline-success-again" onclick="resetOfflineMode()">Send Another</button>
+            </div>
           </div>
         </div>
 
@@ -2389,11 +2426,22 @@ function addFilesToQueue(newFiles) {
     modeSelector.style.display = 'block';
     if (currentMode === 'cloud') {
       updateExpiryRecommendation();
+    } else if (currentMode === 'offline') {
+      // Auto-show device list when files are added in offline mode
+      // (e.g. after "Send Another" picks files — no need to navigate manually)
+      if (devices && devices.length > 0) {
+        setTimeout(() => {
+          renderDeviceList();
+          showOfflineStep('devices');
+          showOfflineQR();
+          startPendingPoll();
+          startBrowserReceiverPoll();
+        }, 300);
+      }
     } else {
       if (!senderPeer) startSenderPeer();
     }
-    // Scroll the file queue into view so the user can see the added files,
-    // especially on mobile where the queue appears below the drop zone
+    // Scroll the file queue into view
     setTimeout(() => {
       const qs = document.getElementById('file-queue-section');
       if (qs) qs.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -3947,7 +3995,11 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     setOfflineProgress(0, 'Receiver is downloading…');
   }
 
-  // ── Sender callback: receiver finished downloading (session complete) ─────────
+  // ── QR session complete: 9s countdown before auto-clear ───────────────────────
+  let _clearCountdownTimer  = null;
+  let _clearCountdownSecs   = 9;
+  let _lastSentFiles        = [];   // snapshot saved before clearing
+
   window.onBrowserSessionComplete = function() {
     const p = window._pendingBrowserSession;
     window._pendingBrowserSession = null;
@@ -3955,13 +4007,119 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     ['offline-detail-row','recv-detail-row'].forEach(id => {
       const el = document.getElementById(id); if (el) el.style.display = 'none';
     });
+
     showOfflineStep('success');
     document.getElementById('offline-success-detail').textContent =
       (p ? p.name : 'Receiver') + ' downloaded all files successfully.';
     if (typeof showPopup === 'function')
       showPopup('✅', 'Transfer complete!',
         (p ? p.name : 'Receiver') + ' received all files.', 'success', 5000);
+
+    // Save a snapshot of sent files for the Resend option, then start countdown
+    _lastSentFiles = filesToSend.slice();
+    _startClearCountdown();
   };
+
+  function _startClearCountdown() {
+    _clearCountdownSecs = 9;
+    const countdownEl  = document.getElementById('offline-clear-countdown');
+    const normalBtns   = document.getElementById('offline-success-normal-btns');
+    const secsEl       = document.getElementById('clear-countdown-secs');
+    if (countdownEl) countdownEl.style.display = 'block';
+    if (normalBtns)  normalBtns.style.display  = 'none';
+    if (secsEl)      secsEl.textContent         = _clearCountdownSecs;
+
+    _clearCountdownTimer = setInterval(() => {
+      _clearCountdownSecs--;
+      if (secsEl) secsEl.textContent = _clearCountdownSecs;
+      if (_clearCountdownSecs <= 0) {
+        _stopClearCountdown();
+        _autoCleanFiles();
+      }
+    }, 1000);
+  }
+
+  function _stopClearCountdown() {
+    if (_clearCountdownTimer) { clearInterval(_clearCountdownTimer); _clearCountdownTimer = null; }
+    const countdownEl = document.getElementById('offline-clear-countdown');
+    const normalBtns  = document.getElementById('offline-success-normal-btns');
+    if (countdownEl) countdownEl.style.display = 'none';
+    if (normalBtns)  normalBtns.style.display  = '';
+  }
+
+  function _autoCleanFiles() {
+    // Clear the queue silently — resend button disappears since _lastSentFiles is cleared
+    _lastSentFiles = [];
+    clearQueue();
+    // Restore device list so sender can send again
+    if (devices && devices.length > 0) {
+      renderDeviceList();
+      showOfflineStep('devices');
+      showOfflineQR();
+      startPendingPoll();
+      startBrowserReceiverPoll();
+    }
+  }
+
+  // [Keep files] — cancel countdown, files stay, go back to device list
+  window.keepFilesAfterTransfer = function() {
+    _stopClearCountdown();
+    _lastSentFiles = [];
+    if (devices && devices.length > 0) {
+      renderDeviceList();
+      showOfflineStep('devices');
+      showOfflineQR();
+      startPendingPoll();
+      startBrowserReceiverPoll();
+    }
+  };
+
+  // [Resend same files] — cancel countdown, reattach saved files, go to device list
+  window.resendSameFiles = function() {
+    _stopClearCountdown();
+    const saved = _lastSentFiles.slice();
+    _lastSentFiles = [];
+    if (saved.length === 0) { resetOfflineMode(); return; }
+    // Re-add the saved files (clears current queue first)
+    filesToSend = [];
+    addFilesToQueue(saved);
+    // Jump to device list
+    if (devices && devices.length > 0) {
+      renderDeviceList();
+      showOfflineStep('devices');
+      showOfflineQR();
+      startPendingPoll();
+      startBrowserReceiverPoll();
+    }
+  };
+
+  // [Send Another] — show confirmation before clearing
+  window.confirmSendAnother = function() {
+    _stopClearCountdown();
+    const overlay = document.getElementById('send-another-confirm');
+    if (overlay) { overlay.hidden = false; overlay.style.display = 'flex'; }
+  };
+
+  window.cancelSendAnother = function() {
+    const overlay = document.getElementById('send-another-confirm');
+    if (overlay) { overlay.hidden = true; overlay.style.display = 'none'; }
+    // Restart countdown since they cancelled
+    if (filesToSend.length > 0) _startClearCountdown();
+  };
+
+  window.proceedSendAnother = function() {
+    const overlay = document.getElementById('send-another-confirm');
+    if (overlay) { overlay.hidden = true; overlay.style.display = 'none'; }
+    _lastSentFiles = [];
+    clearQueue();
+    // Open file picker immediately
+    const fileInput = document.getElementById('file-input');
+    if (fileInput) fileInput.click();
+    // Once files are picked, addFilesToQueue auto-shows device list (see below)
+  };
+
+  // ── Auto-show device list when files dropped while in offline mode ────────────
+  // This means after "Send Another" picks files, device list appears automatically
 
   // ── Receiver mode: browser scanned QR, wants to receive from sender ─────────
 
@@ -4864,6 +5022,8 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // ── Reset ──────────────────────────────────────────────────────────────────
   window.resetOfflineMode = function() {
     if (transferTimer)  { clearTimeout(transferTimer);   transferTimer  = null; }
+    _stopClearCountdown();
+    _lastSentFiles = [];
     ['offline-hotspot-tip-scan','offline-hotspot-tip-nf'].forEach(id => {
       const el = document.getElementById(id); if (el) el.style.display = 'none';
     });
