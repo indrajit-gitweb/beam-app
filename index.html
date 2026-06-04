@@ -2451,10 +2451,14 @@ window.switchTab = function(id) {
     p.classList.toggle('active', p.id===`panel-${id}`);
   });
 
-  // Beam Blaze: silently start advertising when Receive tab opens so this
-  // device is discoverable by a Beam Blaze sender — no prompt, no UI change.
-  // Only works if Blaze permissions were already granted (e.g. from a previous
-  // Blaze session). If not granted, startBlazeAdvertising() does nothing.
+  // Switching to Receive tab hides the Offline section — stop any
+  // offline polls that are running so they don't accumulate in the background
+  if (id === 'recv') {
+    if (typeof window._stopOfflinePoll === 'function') window._stopOfflinePoll();
+    if (typeof window._stopSessionPoll  === 'function') window._stopSessionPoll();
+  }
+
+  // Beam Blaze: silently start advertising when Receive tab opens
   if (window.BeamNative) {
     if (id === 'recv') {
       try { window.BeamNative.startBlazeAdvertising(); } catch(_) {}
@@ -4455,8 +4459,11 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
       if (waitSub) waitSub.textContent =
         sender + ' can see you in their device list. Ask them to tap your name to send.';
 
+      // Store poll handle on window so _stopSessionPoll() can cancel it
+      // from resetOfflineMode, doAppReset, or switchTab — preventing leaks
       // Poll sender for files
       let sessionPoll = setInterval(async () => {
+        window._activeSessionPoll = sessionPoll;
         try {
           const fr = await fetch(base + '/files-for-session/' + sessionId, { cache: 'no-store' });
           const { files } = await fr.json();
@@ -4490,6 +4497,7 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 
             // Resume polling for the next batch on the SAME session
             sessionPoll = setInterval(async () => {
+              window._activeSessionPoll = sessionPoll;
               try {
                 const fr2  = await fetch(base + '/files-for-session/' + sessionId, { cache: 'no-store' });
                 const res2 = await fr2.json();
@@ -4519,8 +4527,11 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
         } catch(_) {}
       }, 1000);
 
-      // Keep session alive for 30 minutes
-      setTimeout(() => { clearInterval(sessionPoll); }, 30 * 60 * 1000);
+      // Keep session alive for 30 minutes, then auto-clean
+      setTimeout(() => {
+        clearInterval(sessionPoll);
+        if (window._activeSessionPoll === sessionPoll) window._activeSessionPoll = null;
+      }, 30 * 60 * 1000);
 
     } catch(e) {
       showOfflineStep('fail');
@@ -5314,6 +5325,8 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     if (transferTimer)  { clearTimeout(transferTimer);   transferTimer  = null; }
     _stopClearCountdown();
     _lastSentFiles = [];
+    // Stop all polls — prevents timers accumulating across multiple sessions
+    if (typeof window._stopSessionPoll === 'function') window._stopSessionPoll();
     ['offline-hotspot-tip-scan','offline-hotspot-tip-nf'].forEach(id => {
       const el = document.getElementById(id); if (el) el.style.display = 'none';
     });
@@ -5651,11 +5664,19 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     }, 2000);
   }
 
-  // Stop pending poll when user leaves offline mode
+  // Stop all offline-related polls — called when leaving offline mode
   window._stopOfflinePoll = function() {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     if (browserReceiverPollTimer) { clearInterval(browserReceiverPollTimer); browserReceiverPollTimer = null; }
     seenReceivers.clear();
+  };
+
+  // Stop the QR session receive poll — prevents leaks when navigating away
+  window._stopSessionPoll = function() {
+    if (window._activeSessionPoll) {
+      clearInterval(window._activeSessionPoll);
+      window._activeSessionPoll = null;
+    }
   };
 
 })();
@@ -5765,6 +5786,7 @@ window.doAppReset = function() {
   window._offlinePendingSessionId   = null;
   window._currentTransferSessionId  = null;
   window._currentTransferReceiverIp = null;
+  if (typeof window._stopSessionPoll === 'function') window._stopSessionPoll();
 
   // ── Scroll to top ─────────────────────────────────────────────────────────
   window.scrollTo({ top: 0, behavior: 'smooth' });
