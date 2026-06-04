@@ -1037,18 +1037,6 @@
   </div>
 </div>
 
-<!-- "Send Another" confirmation overlay -->
-<div id="send-another-confirm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center;padding:20px">
-  <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:20px 24px;max-width:300px;width:100%;text-align:center">
-    <div style="font-size:.95rem;font-weight:700;color:var(--text);margin-bottom:8px">Start a new transfer?</div>
-    <div style="font-size:.76rem;color:var(--muted-2);margin-bottom:18px;line-height:1.5">Current files will be cleared.<br>You'll pick new files from your device.</div>
-    <div style="display:flex;gap:8px;justify-content:center">
-      <button onclick="cancelSendAnother()" style="flex:1;padding:9px;border-radius:7px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:.82rem;cursor:pointer">Cancel</button>
-      <button onclick="proceedSendAnother()" style="flex:1;padding:9px;border-radius:7px;border:none;background:rgba(16,185,129,.15);color:#34d399;font-weight:700;font-size:.82rem;cursor:pointer">Yes, pick files</button>
-    </div>
-  </div>
-</div>
-
 <!-- Beam Blaze incoming overlay — global, appears on ANY tab when a Blaze
      sender finds this device (receiver just has Receive tab open)           -->
 <div id="blaze-incoming-overlay" class="lan-incoming-overlay" style="display:none">
@@ -2427,17 +2415,13 @@ function addFilesToQueue(newFiles) {
     if (currentMode === 'cloud') {
       updateExpiryRecommendation();
     } else if (currentMode === 'offline') {
-      // Auto-show device list when files are added in offline mode
-      // (e.g. after "Send Another" picks files — no need to navigate manually)
-      if (devices && devices.length > 0) {
-        setTimeout(() => {
-          renderDeviceList();
-          showOfflineStep('devices');
-          showOfflineQR();
-          startPendingPoll();
-          startBrowserReceiverPoll();
-        }, 300);
-      }
+      // Auto-show device list when files are added in offline mode.
+      // Uses the window-exposed helper to avoid scope issues
+      // (initOfflineMode IIFE internals not accessible from here)
+      setTimeout(() => {
+        if (typeof window._showDeviceListIfReady === 'function')
+          window._showDeviceListIfReady();
+      }, 300);
     } else {
       if (!senderPeer) startSenderPeer();
     }
@@ -4094,22 +4078,32 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   };
 
   // [Send Another] — show confirmation before clearing
+  function _showOverlay(el) {
+    if (!el) return;
+    el.style.display       = 'flex';
+    el.style.visibility    = 'visible';
+    el.style.pointerEvents = 'auto';
+  }
+  function _hideOverlay(el) {
+    if (!el) return;
+    el.style.display       = 'none';
+    el.style.visibility    = 'hidden';
+    el.style.pointerEvents = 'none';
+  }
+
   window.confirmSendAnother = function() {
     _stopClearCountdown();
-    const overlay = document.getElementById('send-another-confirm');
-    if (overlay) { overlay.hidden = false; overlay.style.display = 'flex'; }
+    _showOverlay(document.getElementById('send-another-confirm'));
   };
 
   window.cancelSendAnother = function() {
-    const overlay = document.getElementById('send-another-confirm');
-    if (overlay) { overlay.hidden = true; overlay.style.display = 'none'; }
+    _hideOverlay(document.getElementById('send-another-confirm'));
     // Restart countdown since they cancelled
     if (filesToSend.length > 0) _startClearCountdown();
   };
 
   window.proceedSendAnother = function() {
-    const overlay = document.getElementById('send-another-confirm');
-    if (overlay) { overlay.hidden = true; overlay.style.display = 'none'; }
+    _hideOverlay(document.getElementById('send-another-confirm'));
     _lastSentFiles = [];
     clearQueue();
     // Open file picker immediately
@@ -5312,6 +5306,18 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   // Hook into autoDetectConnection result to show Blaze button when scan fails
   // (done inside autoDetectConnection's notfound handler via showBlazeButton())
 
+  // Expose device-list helper for addFilesToQueue (global scope can't reach IIFE internals)
+  window._showDeviceListIfReady = function() {
+    if (currentMode !== 'offline') return;
+    if (devices && devices.length > 0) {
+      renderDeviceList();
+      showOfflineStep('devices');
+      showOfflineQR();
+      startPendingPoll();
+      startBrowserReceiverPoll();
+    }
+  };
+
   // ── Expose helpers for native callbacks ────────────────────────────────────
   // onLanServerFound: called by Android NSD/mDNS when a Beam device is found
   window.onLanServerFound = function(httpUrl) {
@@ -5429,5 +5435,35 @@ function _processDlQueue() {
 
 
 </script>
+<!-- "Send Another" confirmation overlay — placed last so it never affects page layout -->
+<div id="send-another-confirm"
+     style="display:none;visibility:hidden;position:fixed;inset:0;
+            background:rgba(0,0,0,.6);z-index:9999;
+            align-items:center;justify-content:center;padding:20px;
+            pointer-events:none">
+  <div style="background:var(--surface-2);border:1px solid var(--border);
+              border-radius:12px;padding:20px 24px;max-width:300px;
+              width:100%;text-align:center;pointer-events:auto">
+    <div style="font-size:.95rem;font-weight:700;color:var(--text);margin-bottom:8px">
+      Start a new transfer?
+    </div>
+    <div style="font-size:.76rem;color:var(--muted-2);margin-bottom:18px;line-height:1.5">
+      Current files will be cleared.<br>You'll pick new files from your device.
+    </div>
+    <div style="display:flex;gap:8px;justify-content:center">
+      <button onclick="cancelSendAnother()"
+              style="flex:1;padding:9px;border-radius:7px;border:1px solid var(--border);
+                     background:transparent;color:var(--muted);font-size:.82rem;cursor:pointer">
+        Cancel
+      </button>
+      <button onclick="proceedSendAnother()"
+              style="flex:1;padding:9px;border-radius:7px;border:none;
+                     background:rgba(16,185,129,.15);color:#34d399;
+                     font-weight:700;font-size:.82rem;cursor:pointer">
+        Yes, pick files
+      </button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
