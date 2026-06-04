@@ -3751,6 +3751,27 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
   async function autoDetectConnection() {
     showOfflineStep('scanning');
     const scanNote = document.getElementById('offline-scan-note');
+
+    // ── QR fast-path: receiver scanned sender's QR code ───────────────────
+    // ?connect=ip was set by the startup handler below — skip full subnet
+    // scan and go straight to the sender's IP.
+    if (window._beamQRConnectIP) {
+      const senderIP = window._beamQRConnectIP;
+      window._beamQRConnectIP = null;
+      if (scanNote) scanNote.textContent = 'Connecting to sender…';
+      devices = [];
+      await probeDevice(senderIP);
+      if (devices.length > 0) {
+        renderDeviceList();
+        showOfflineStep('devices');
+        showOfflineQR();
+        startPendingPoll();
+        return;
+      }
+      // Probe failed (sender may have moved) — fall through to normal scan
+      if (scanNote) scanNote.textContent = 'Sender not found — scanning WiFi…';
+    }
+
     if (scanNote) scanNote.textContent = 'Looking for Beam devices on your WiFi…';
     checkAndShowHotspotTip();
 
@@ -4462,16 +4483,18 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
     if (IS_ELECTRON) {
       // Mac: get IP from Electron IPC
       window.electronAPI?.getLanInfo?.().then(info => {
-        if (info?.ip) renderQR('http://' + info.ip + ':' + LAN_PORT);
+        if (info?.ip) {
+          // ?connect=ip tells the receiver's Beam to auto-connect to this device
+          renderQR('http://' + info.ip + ':' + LAN_PORT + '?connect=' + info.ip);
+        }
       }).catch(() => {});
     } else if (isAndroid() && window.BeamNative) {
-      // Android: show own server URL so others can scan and open Beam in browser
       const ip = window.BeamNative.getLocalIp?.() || '';
       if (ip) {
-        renderQR('http://' + ip + ':' + LAN_PORT);
-        // Update the box title to make its purpose clear
+        // Encode sender IP so receiver's Beam auto-connects on QR scan
+        renderQR('http://' + ip + ':' + LAN_PORT + '?connect=' + ip);
         const titleEl = document.querySelector('#offline-android-box .offline-android-title');
-        if (titleEl) titleEl.textContent = '📱 Share your address';
+        if (titleEl) titleEl.textContent = '📱 Scan to connect instantly';
       }
     }
   }
@@ -4797,6 +4820,32 @@ function _processDlQueue() {
   triggerHttpDownload(item.url, item.filename, item.fromName);
 }
 
+// ── QR Connect startup handler ────────────────────────────────────────────────
+// When the receiver scans the sender's QR code, the URL contains ?connect=ip.
+// This handler detects that param, stores the IP, then auto-switches to Offline
+// mode so autoDetectConnection() can fast-path directly to the sender's device
+// — no subnet scan, instant connection.
+(function handleQRConnect() {
+  const params   = new URLSearchParams(window.location.search);
+  const senderIP = params.get('connect');
+
+  // Validate: must be a dotted-decimal IPv4 address
+  if (!senderIP || !/^\d{1,3}(\.\d{1,3}){3}$/.test(senderIP)) return;
+
+  // Store for autoDetectConnection() to pick up
+  window._beamQRConnectIP = senderIP;
+
+  // Clean the URL bar so sharing the page doesn't re-trigger the flow
+  try {
+    history.replaceState({}, '', window.location.pathname);
+  } catch(_) {}
+
+  // Auto-switch to Offline mode after a brief paint delay so the user sees
+  // the app before it navigates — feels natural, not jarring
+  setTimeout(() => {
+    if (typeof selectMode === 'function') selectMode('offline');
+  }, 600);
+})();
 
 
 </script>
