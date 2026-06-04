@@ -4170,12 +4170,29 @@ document.querySelectorAll('.hiw-tab').forEach(tab => {
 
   // ── Session-based transfer: sender uploads to own server for browser receiver ─
   async function startBrowserSessionTransfer(dev, files) {
-    // On Android (file:// protocol) and Electron, server is on localhost.
-    // On browser served from LAN server, use window.location.hostname.
     const ownBase = IS_ELECTRON || isAndroid() || !window.location.hostname
       ? 'http://localhost:' + LAN_PORT
       : 'http://' + window.location.hostname + ':' + LAN_PORT;
     if (!ownBase) { showOfflineStep('fail'); return; }
+
+    // ── Android native path: link stored URIs directly — zero disk copy ────
+    // Files are already on the sender's device. Instead of reading them into
+    // memory and copying to a temp file (which would OOM or fill the disk),
+    // the server streams them straight from the original content URIs.
+    if (isAndroid() && window.BeamNative?.linkUrisToSession) {
+      const linked = window.BeamNative.linkUrisToSession(dev.sessionId);
+      if (linked) {
+        showOfflineStep('transfer');
+        const d = document.getElementById('offline-transfer-direction');
+        if (d) d.textContent = 'Waiting for';
+        document.getElementById('offline-transfer-device').textContent = dev.name;
+        setOfflineProgress(100, 'Files ready — waiting for ' + dev.name + ' to download…');
+        const sr = document.getElementById('offline-speed-row');
+        if (sr) sr.style.display = 'none';
+        window._pendingBrowserSession = { name: dev.name, sessionId: dev.sessionId };
+        return;
+      }
+    }
 
     showOfflineStep('transfer');
     document.getElementById('offline-transfer-device').textContent = dev.name;

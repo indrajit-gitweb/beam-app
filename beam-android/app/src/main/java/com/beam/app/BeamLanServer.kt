@@ -71,7 +71,11 @@ class BeamLanServer(
         val tempFile: File       // file on disk, deleted after download
     )
 
-    private val browserSessions = ConcurrentHashMap<String, BrowserReceiverSession>()
+    private val browserSessions    = ConcurrentHashMap<String, BrowserReceiverSession>()
+    // For Android sender: files served directly from content URIs — no temp copy
+    data class NativeFile(val fileId: String, val name: String, val size: Long,
+                          val type: String, val uri: android.net.Uri)
+    private val nativeFileSessions = ConcurrentHashMap<String, MutableList<NativeFile>>()
 
     private val sessions    = ConcurrentHashMap<String, TransferSession>()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -124,8 +128,10 @@ class BeamLanServer(
             return cors(handleUpload(session))
 
         // ── Browser receiver session (QR flow) ─────────────────────────────────
-        // Receiver calls /receiver-ready → gets sessionId → polls /files-for-session
-        // Sender uploads to /upload-for-session → receiver downloads
+        // Android native sender: link stored URIs to session (no disk copy)
+        if (uri.startsWith("/link-uris-to-session/") && method == Method.POST)
+            return cors(handleLinkUrisToSession(uri.removePrefix("/link-uris-to-session/").split("?")[0]))
+
         if (uri == "/receiver-ready" && method == Method.POST)
             return cors(handleReceiverReady(session))
 
@@ -513,16 +519,49 @@ class BeamLanServer(
         }
     }
 
+    /** Link the sender's stored URIs directly to the session — zero disk copy. */
+    fun linkUrisToSession(sessionId: String, uris: List<android.net.Uri>) {
+        val list = mutableListOf<NativeFile>()
+        uris.forEach { uri ->
+            try {
+                var name = "file"; var size = 0L
+                context.contentResolver.query(uri,
+                    arrayOf(android.provider.OpenableColumns.DISPLAY_NAME,
+                            android.provider.OpenableColumns.SIZE), null, null, null
+                )?.use { c ->
+                    if (c.moveToFirst()) {
+                        val ni = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        val si = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                        if (ni >= 0) name = c.getString(ni) ?: "file"
+                        if (si >= 0) size = c.getLong(si)
+                    }
+                }
+                val mime   = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                val fileId = generateId()
+                list.add(NativeFile(fileId, name, size, mime, uri))
+            } catch (e: Exception) { Log.e(TAG, "linkUri error: ${e.message}") }
+        }
+        nativeFileSessions[sessionId] = list
+        Log.d(TAG, "Linked ${list.size} native file(s) to session $sessionId")
+    }
+
+    private fun handleLinkUrisToSession(sessionId: String): Response =
+        newFixedLengthResponse(Response.Status.OK, "application/json", """{"ok":true}""")
+
     private fun handleFilesForSession(sessionId: String): Response {
-        val bSession = browserSessions[sessionId]
-            ?: return newFixedLengthResponse(Response.Status.OK, "application/json", """{"files":[]}""")
         val arr = JSONArray()
-        bSession.files.forEach { f ->
+        // Check native URI session first (Android sender — no disk copy)
+        nativeFileSessions[sessionId]?.forEach { f ->
             arr.put(JSONObject().apply {
-                put("fileId", f.fileId)
-                put("name",   f.name)
-                put("size",   f.size)
-                put("type",   f.type)
+                put("fileId", f.fileId); put("name", f.name)
+                put("size",   f.size);   put("type", f.type)
+            })
+        }
+        // Then check uploaded temp-file session (browser sender)
+        browserSessions[sessionId]?.files?.forEach { f ->
+            arr.put(JSONObject().apply {
+                put("fileId", f.fileId); put("name", f.name)
+                put("size",   f.size);   put("type", f.type)
             })
         }
         return newFixedLengthResponse(Response.Status.OK, "application/json",
@@ -530,6 +569,26 @@ class BeamLanServer(
     }
 
     private fun handleDownloadForSession(sessionId: String, fileId: String): Response {
+        // Native URI file — stream directly, no temp copy
+        nativeFileSessions[sessionId]?.let { list ->
+            val file = list.find { it.fileId == fileId }
+            if (file != null) {
+                list.remove(file)
+                if (list.isEmpty()) nativeFileSessions.remove(sessionId)
+                val stream = try {
+                    context.contentResolver.openInputStream(file.uri)
+                        ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Cannot open file")
+                } catch (e: Exception) {
+                    return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", e.message ?: "error")
+                }
+                val res = newFixedLengthResponse(Response.Status.OK, file.type, stream, file.size)
+                res.addHeader("Content-Disposition", "attachment; filename=\"${encode(file.name)}\"")
+                res.addHeader("Cache-Control", "no-store")
+                res.addHeader("Access-Control-Expose-Headers", "Content-Length")
+                return res
+            }
+        }
+        // Temp-file session (browser sender)
         val bSession = browserSessions[sessionId]
             ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Session not found")
         val file = bSession.files.find { it.fileId == fileId }
@@ -537,12 +596,10 @@ class BeamLanServer(
         bSession.files.remove(file)
         if (!file.tempFile.exists())
             return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "File expired")
-        // Stream from temp file — delete after delivery
         val res = newFixedLengthResponse(Response.Status.OK, file.type,
             java.io.FileInputStream(file.tempFile), file.size)
         res.addHeader("Content-Disposition", "attachment; filename=\"${encode(file.name)}\"")
         res.addHeader("Cache-Control", "no-store")
-        // Expose Content-Length so browser can calculate download progress
         res.addHeader("Access-Control-Expose-Headers", "Content-Length")
         mainHandler.postDelayed({ file.tempFile.delete() }, 5000)
         return res

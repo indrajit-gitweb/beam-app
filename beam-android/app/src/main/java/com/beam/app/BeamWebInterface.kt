@@ -198,6 +198,17 @@ class BeamWebInterface(private val context: Context) {
     /** Returns stored URIs for Beam Blaze to stream directly (no base64 needed) */
     fun getStoredUris(): List<android.net.Uri> = storedUris
 
+    /**
+     * Android sender: link stored URIs to a browser session so the server can
+     * stream them directly to the receiver — no temp file copy, no disk space wasted.
+     */
+    @JavascriptInterface
+    fun linkUrisToSession(sessionId: String): Boolean {
+        if (storedUris.isEmpty()) return false
+        beamLanServer?.linkUrisToSession(sessionId, storedUris)
+        return true
+    }
+
     /** Get display name for a URI */
     fun getUriFileName(uri: android.net.Uri): String? = try {
         context.contentResolver.query(uri,
