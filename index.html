@@ -2684,7 +2684,9 @@ function addCompletedFileCard(meta, blob, skipped = false) {
 
   const info = document.createElement('div');
   info.className = 'cfi-info';
-  info.innerHTML = `<div class="cfi-name">${escHtml ? escHtml(meta.name) : meta.name}</div>
+  // Inline HTML-escape — escHtml() is IIFE-scoped and not accessible here
+  const _safeName = meta.name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  info.innerHTML = `<div class="cfi-name">${_safeName}</div>
     <div class="cfi-meta">${formatBytes(meta.size)}${skipped ? ' · skipped' : ' · received'}</div>`;
 
   item.appendChild(icon);
