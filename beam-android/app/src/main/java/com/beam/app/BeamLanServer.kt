@@ -62,12 +62,13 @@ class BeamLanServer(
         val receiverName: String,
         val files: MutableList<StoredFile> = mutableListOf()
     )
+    // Files are stored on disk (cache dir) — never in memory — to handle large files
     data class StoredFile(
-        val fileId: String,
-        val name:   String,
-        val size:   Long,
-        val type:   String,
-        val data:   ByteArray
+        val fileId:   String,
+        val name:     String,
+        val size:     Long,
+        val type:     String,
+        val tempFile: File       // file on disk, deleted after download
     )
 
     private val browserSessions = ConcurrentHashMap<String, BrowserReceiverSession>()
@@ -462,32 +463,36 @@ class BeamLanServer(
             ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Session not found")
 
         return try {
-            val out = java.io.ByteArrayOutputStream()
-            val buf = ByteArray(64 * 1024)
+            // Stream to a temp file — never buffer in memory so large files work fine
+            val fileId   = generateId()
+            val tempFile = File(context.cacheDir, "beam_session_$fileId")
+            val fos      = FileOutputStream(tempFile)
+            val buf      = ByteArray(64 * 1024)
             var n: Int
+            var total    = 0L
 
-            // Read exactly Content-Length bytes — reading until EOF causes
-            // SocketTimeoutException because NanoHTTPD keeps the socket alive
-            if (contentLen > 0) {
-                var remaining = contentLen
-                while (remaining > 0) {
-                    val toRead = minOf(buf.size.toLong(), remaining).toInt()
-                    n = session.inputStream.read(buf, 0, toRead)
-                    if (n == -1) break
-                    out.write(buf, 0, n)
-                    remaining -= n
+            try {
+                if (contentLen > 0) {
+                    var remaining = contentLen
+                    while (remaining > 0) {
+                        val toRead = minOf(buf.size.toLong(), remaining).toInt()
+                        n = session.inputStream.read(buf, 0, toRead)
+                        if (n == -1) break
+                        fos.write(buf, 0, n)
+                        total     += n
+                        remaining -= n
+                    }
+                } else {
+                    while (session.inputStream.read(buf).also { n = it } != -1) {
+                        fos.write(buf, 0, n); total += n
+                    }
                 }
-            } else {
-                // Fallback: no Content-Length (shouldn't happen from XHR but handle gracefully)
-                while (session.inputStream.read(buf).also { n = it } != -1) {
-                    out.write(buf, 0, n)
-                }
-            }
+            } finally { fos.flush(); fos.close() }
 
-            val data   = out.toByteArray()
-            val fileId = generateId()
-            bSession.files.add(StoredFile(fileId, filename, data.size.toLong(), filetype, data))
-            Log.d(TAG, "File stored for session $sessionId: $filename (${data.size} B)")
+            bSession.files.add(StoredFile(fileId, filename, total, filetype, tempFile))
+            // Auto-delete temp file after 10 minutes if not downloaded
+            mainHandler.postDelayed({ tempFile.delete() }, 10 * 60_000L)
+            Log.d(TAG, "Stored for session $sessionId: $filename ($total B) → ${tempFile.name}")
             newFixedLengthResponse(Response.Status.OK, "application/json",
                 """{"ok":true,"fileId":"$fileId"}""")
         } catch (e: Exception) {
@@ -517,12 +522,15 @@ class BeamLanServer(
             ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Session not found")
         val file = bSession.files.find { it.fileId == fileId }
             ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "File not found")
-        // Remove after delivery
         bSession.files.remove(file)
+        if (!file.tempFile.exists())
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "File expired")
+        // Stream from temp file — delete after delivery
         val res = newFixedLengthResponse(Response.Status.OK, file.type,
-            file.data.inputStream(), file.data.size.toLong())
+            java.io.FileInputStream(file.tempFile), file.size)
         res.addHeader("Content-Disposition", "attachment; filename=\"${encode(file.name)}\"")
         res.addHeader("Cache-Control", "no-store")
+        mainHandler.postDelayed({ file.tempFile.delete() }, 5000)
         return res
     }
 
