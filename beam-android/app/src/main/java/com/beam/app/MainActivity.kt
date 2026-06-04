@@ -180,6 +180,7 @@ class MainActivity : AppCompatActivity(), BeamWebInterface.BlazeHost {
 
                 // ── Transfer progress ─────────────────────────────────────────
                 BeamTransferService.ACTION_TRANSFER_PROGRESS -> {
+                    acquireTransferWakeLock()   // ensure CPU stays on during transfer
                     val pct   = intent.getIntExtra("pct", 0)
                     val fname = intent.getStringExtra("filename") ?: ""
                     val bytes = intent.getLongExtra("bytesTransferred", 0L)
@@ -192,8 +193,9 @@ class MainActivity : AppCompatActivity(), BeamWebInterface.BlazeHost {
                     }
                 }
 
-                // ── Transfer complete ──────────────────────────────────────────
+                // ── Transfer complete — release WakeLock ──────────────────────
                 BeamTransferService.ACTION_TRANSFER_COMPLETE -> {
+                    releaseTransferWakeLock()   // transfer done — phone can sleep normally
                     val filename  = intent.getStringExtra("filename")  ?: ""
                     val savedPath = intent.getStringExtra("savedPath") ?: ""
                     val fromName  = intent.getStringExtra("fromName")  ?: ""
@@ -209,8 +211,9 @@ class MainActivity : AppCompatActivity(), BeamWebInterface.BlazeHost {
                     }
                 }
 
-                // ── Transfer failed ───────────────────────────────────────────
+                // ── Transfer failed — release WakeLock ────────────────────────
                 BeamTransferService.ACTION_TRANSFER_FAILED -> {
+                    releaseTransferWakeLock()
                     val error = intent.getStringExtra("error") ?: "Unknown error"
                     runOnUiThread {
                         webView.evaluateJavascript(
@@ -220,8 +223,9 @@ class MainActivity : AppCompatActivity(), BeamWebInterface.BlazeHost {
                     }
                 }
 
-                // ── Transfer cancelled ────────────────────────────────────────
+                // ── Transfer cancelled — release WakeLock ─────────────────────
                 BeamTransferService.ACTION_TRANSFER_CANCELLED -> {
+                    releaseTransferWakeLock()
                     runOnUiThread {
                         webView.evaluateJavascript(
                             "window.onNativeTransferCancelled && " +
@@ -464,13 +468,17 @@ class MainActivity : AppCompatActivity(), BeamWebInterface.BlazeHost {
             beamLanServer = server
             Log.d("MainActivity", "LAN server: ${server.getServerUrl()}")
 
-            // WakeLock — keeps CPU alive for the server thread
-            val pm = getSystemService(POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Beam::LanServerWakeLock")
-                .apply { acquire(60 * 60 * 1000L) }
+            // WakeLock is NOT held at startup — it is acquired only when a
+            // transfer begins (see acquireTransferWakeLock) and released when
+            // the transfer completes. This prevents unnecessary battery drain
+            // while the app is idle between transfers.
 
-            // Battery optimization exemption — prevents Realme/OPPO from freezing us
-            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            // Battery optimization exemption — ask once, never again.
+            val pm2 = getSystemService(POWER_SERVICE) as PowerManager
+            val prefs = getSharedPreferences("beam_prefs", MODE_PRIVATE)
+            val askedBefore = prefs.getBoolean("battery_opt_asked", false)
+            if (!askedBefore && !pm2.isIgnoringBatteryOptimizations(packageName)) {
+                prefs.edit().putBoolean("battery_opt_asked", true).apply()
                 try {
                     startActivity(Intent(
                         Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
@@ -511,6 +519,25 @@ class MainActivity : AppCompatActivity(), BeamWebInterface.BlazeHost {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(broadcastReceiver, filter)
         }
+    }
+
+    // ── WakeLock: acquire only when a transfer is active ─────────────────────
+    // Called on first TRANSFER_PROGRESS broadcast — ensures CPU stays awake
+    // during the actual file transfer without wasting battery while idle.
+    private fun acquireTransferWakeLock() {
+        if (wakeLock?.isHeld == true) return   // already held
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        @Suppress("WakelockTimeout")
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Beam::TransferActive")
+            .apply { acquire(30 * 60 * 1000L) }   // max 30 min per transfer
+        Log.d("MainActivity", "WakeLock acquired for transfer")
+    }
+
+    // Called on TRANSFER_COMPLETE / FAILED / CANCELLED — phone can sleep normally
+    private fun releaseTransferWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+        Log.d("MainActivity", "WakeLock released after transfer")
     }
 
     override fun onDestroy() {

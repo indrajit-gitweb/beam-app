@@ -351,22 +351,37 @@ const httpServer = http.createServer((req, res) => {
   }
 
   // POST /upload-for-session  — sender uploads a file for a browser receiver session
+  // Streams directly to a temp file on disk — never buffers in memory so any
+  // file size works without risking an out-of-memory crash on the Mac.
   if (req.url === '/upload-for-session' && req.method === 'POST') {
     const filename  = decodeURIComponent(req.headers['x-filename']  || 'file');
     const filetype  = req.headers['x-filetype']  || 'application/octet-stream';
     const sessionId = req.headers['x-session-id'] || '';
     const sess      = browserReceiverSessions.get(sessionId);
     if (!sess) { res.writeHead(404); res.end('Session not found'); return; }
-    const chunks = [];
-    req.on('data', c => chunks.push(c));
+
+    const fileId  = require('crypto').randomBytes(12).toString('hex');
+    const tmpPath = require('path').join(require('os').tmpdir(), `beam_sess_${fileId}`);
+    const ws2     = fs.createWriteStream(tmpPath);
+    let   total   = 0;
+
+    req.on('data', chunk => { ws2.write(chunk); total += chunk.length; });
     req.on('end', () => {
-      const buffer = Buffer.concat(chunks);
-      const fileId = require('crypto').randomBytes(12).toString('hex');
-      sess.files.push({ fileId, name: filename, size: buffer.length, type: filetype, buffer });
-      console.log(`[beam-lan] File stored for session ${sessionId}: ${filename} (${buffer.length} B)`);
-      res.writeHead(200, { 'Content-Type': 'application/json', });
-      res.end(JSON.stringify({ ok: true, fileId }));
+      ws2.end();
+      ws2.on('finish', () => {
+        sess.files.push({ fileId, name: filename, size: total, type: filetype, tmpPath });
+        // Auto-delete temp file after 10 minutes if never downloaded
+        setTimeout(() => { try { fs.unlinkSync(tmpPath); } catch(_) {} }, 10 * 60 * 1000);
+        console.log(`[beam-lan] Session file on disk: ${filename} (${total} B) → ${tmpPath}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, fileId }));
+      });
+      ws2.on('error', err => {
+        console.error('[beam-lan] session write error:', err.message);
+        res.writeHead(500); res.end('Write error');
+      });
     });
+    req.on('error', () => { try { ws2.destroy(); fs.unlinkSync(tmpPath); } catch(_) {} });
     return;
   }
 
@@ -414,15 +429,20 @@ const httpServer = http.createServer((req, res) => {
     const sess      = browserReceiverSessions.get(sessionId);
     const file      = sess?.files.find(f => f.fileId === fileId);
     if (!file) { res.writeHead(404); res.end('Not found'); return; }
-    sess.files.splice(sess.files.indexOf(file), 1); // remove after delivery
+    sess.files.splice(sess.files.indexOf(file), 1); // remove from session list
+    if (!fs.existsSync(file.tmpPath)) { res.writeHead(404); res.end('File expired'); return; }
     res.writeHead(200, {
       'Content-Type':                    file.type,
       'Content-Disposition':             `attachment; filename="${encodeURIComponent(file.name)}"`,
-      'Content-Length':                  String(file.buffer.length),
+      'Content-Length':                  String(file.size),
       'Cache-Control':                   'no-store',
       'Access-Control-Expose-Headers':   'Content-Length',
     });
-    res.end(file.buffer);
+    // Stream from disk — no memory spike regardless of file size
+    const readStream = fs.createReadStream(file.tmpPath);
+    readStream.pipe(res);
+    readStream.on('end', () => { try { fs.unlinkSync(file.tmpPath); } catch(_) {} });
+    readStream.on('error', () => { try { fs.unlinkSync(file.tmpPath); } catch(_) {} });
     return;
   }
 
