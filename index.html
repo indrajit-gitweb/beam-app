@@ -543,6 +543,16 @@
     .offline-recv-col .step-num { background: rgba(16,185,129,.12); color: #34d399; border-color: rgba(16,185,129,.25); }
     .offline-send-col .how-step:not(:last-child)::before { background: #10b981; }
     .offline-recv-col .how-step:not(:last-child)::before { background: #10b981; }
+    /* P2P receive column — match indigo (overrides default green recv-col) */
+    #hiw-p2p .recv-col::before { background: linear-gradient(90deg,transparent,var(--accent),transparent); }
+    #hiw-p2p .recv-col .how-col-title { color: var(--accent-2); }
+    #hiw-p2p .recv-col .step-num { background: rgba(99,102,241,.12); color: var(--accent-2); border-color: rgba(99,102,241,.2); }
+    #hiw-p2p .recv-col .how-step:not(:last-child)::before { background: var(--accent); }
+    /* Cloud receive column — match sky blue */
+    #hiw-cloud .recv-col::before { background: linear-gradient(90deg,transparent,#0ea5e9,transparent); }
+    #hiw-cloud .recv-col .how-col-title { color: #38bdf8; }
+    #hiw-cloud .recv-col .step-num { background: rgba(14,165,233,.12); color: #38bdf8; border-color: rgba(14,165,233,.25); }
+    #hiw-cloud .recv-col .how-step:not(:last-child)::before { background: #0ea5e9; }
     /* Beam Blaze columns — orange */
     .how-col.blaze-send-col::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,transparent,#f97316,transparent); opacity:.7; }
     .how-col.blaze-recv-col::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,transparent,#fb923c,transparent); opacity:.6; }
